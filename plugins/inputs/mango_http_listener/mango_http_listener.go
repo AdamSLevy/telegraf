@@ -12,14 +12,15 @@ import (
 	"net"
 	"net/http"
 	"regexp"
+	"strconv"
 	"sync"
 	"time"
 
 	"github.com/influxdata/telegraf"
 	"github.com/influxdata/telegraf/internal"
-	"github.com/influxdata/telegraf/metric"
+	//"github.com/influxdata/telegraf/metric"
 	"github.com/influxdata/telegraf/plugins/inputs"
-	json_parser "github.com/influxdata/telegraf/plugins/parsers/json"
+	//json_parser "github.com/influxdata/telegraf/plugins/parsers/json"
 	"github.com/influxdata/telegraf/selfstat"
 )
 
@@ -115,17 +116,17 @@ func (h *MangoHTTPListener) Start(acc telegraf.Accumulator) error {
 	tags := map[string]string{
 		"address": h.ServiceAddress,
 	}
-	h.BytesRecv = selfstat.Register("http_listener_json", "bytes_received", tags)
-	h.RequestsServed = selfstat.Register("http_listener_json", "requests_served", tags)
-	h.WritesServed = selfstat.Register("http_listener_json", "writes_served", tags)
-	h.QueriesServed = selfstat.Register("http_listener_json", "queries_served", tags)
-	h.PingsServed = selfstat.Register("http_listener_json", "pings_served", tags)
-	h.RequestsRecv = selfstat.Register("http_listener_json", "requests_received", tags)
-	h.WritesRecv = selfstat.Register("http_listener_json", "writes_received", tags)
-	h.QueriesRecv = selfstat.Register("http_listener_json", "queries_received", tags)
-	h.PingsRecv = selfstat.Register("http_listener_json", "pings_received", tags)
-	h.NotFoundsServed = selfstat.Register("http_listener_json", "not_founds_served", tags)
-	h.BuffersCreated = selfstat.Register("http_listener_json", "buffers_created", tags)
+	h.BytesRecv = selfstat.Register("mango_http_listener", "bytes_received", tags)
+	h.RequestsServed = selfstat.Register("mango_http_listener", "requests_served", tags)
+	h.WritesServed = selfstat.Register("mango_http_listener", "writes_served", tags)
+	h.QueriesServed = selfstat.Register("mango_http_listener", "queries_served", tags)
+	h.PingsServed = selfstat.Register("mango_http_listener", "pings_served", tags)
+	h.RequestsRecv = selfstat.Register("mango_http_listener", "requests_received", tags)
+	h.WritesRecv = selfstat.Register("mango_http_listener", "writes_received", tags)
+	h.QueriesRecv = selfstat.Register("mango_http_listener", "queries_received", tags)
+	h.PingsRecv = selfstat.Register("mango_http_listener", "pings_received", tags)
+	h.NotFoundsServed = selfstat.Register("mango_http_listener", "not_founds_served", tags)
+	h.BuffersCreated = selfstat.Register("mango_http_listener", "buffers_created", tags)
 
 	if h.MaxBodySize == 0 {
 		h.MaxBodySize = DEFAULT_MAX_BODY_SIZE
@@ -323,37 +324,72 @@ func (h *MangoHTTPListener) serveWrite(res http.ResponseWriter, req *http.Reques
 }
 
 func (h *MangoHTTPListener) parse(b []byte, t time.Time, precision string) error {
-	log.Printf("JSON: %s\n", b)
-	r := regexp.MustCompile(`@\d+"`)
-	b = []byte(r.ReplaceAllString(string(b), `"`))
-	log.Printf("JSON: %s\n", b)
+	// Data format: {"data": "10.000@1234456667", "data2":"144@12345566"}
 
-	f := json_parser.JSONFlattener{}
-	var jsonOut map[string]interface{}
-	json.Unmarshal(b, &jsonOut)
-	err := f.FullFlattenJSON("", jsonOut, true, true)
-	if err != nil {
-		log.Println(err)
-	}
-	log.Println("fields: ", f.Fields)
-	metrics := make([]telegraf.Metric, 0)
-	metric, err := metric.New("mango_http_listener", nil, f.Fields, time.Now().UTC())
-	if err != nil {
-		return err
-	}
-	metrics = append(metrics, metric)
+	// Unmarshall two copies of the JSON, one of the timestamp and one of the value
+	regValues := regexp.MustCompile(`"[\d\.]+@`) // Matches values
+	regTimes := regexp.MustCompile(`@\d+"`)      // Matches timestamps
 
-	log.Println("metrics: ", metrics)
+	valuesBytes := []byte(regTimes.ReplaceAllString(string(b), `"`))
+	timesBytes := []byte(regValues.ReplaceAllString(string(b), `"`))
 
-	for _, m := range metrics {
-		fields := make(map[string]interface{})
-		for k, v := range m.Fields() {
-			fields[k] = v
+	var valuesJSON map[string]interface{}
+	var timesJSON map[string]interface{}
+	json.Unmarshal(valuesBytes, &valuesJSON)
+	json.Unmarshal(timesBytes, &timesJSON)
+	log.Printf("original JSON: %s\n", b)
+	log.Printf("values JSON:   %s\n", valuesJSON)
+	log.Printf("times JSON:    %s\n", timesJSON)
+
+	// Extract Tags
+
+	// All values and times are strings, convert to correct type
+	for k, v := range valuesJSON {
+		if v, ok := v.(string); ok {
+			if x, err := strconv.ParseBool(v); err == nil {
+				valuesJSON[k] = x
+			} else if x, err := strconv.ParseInt(v, 10, 64); err == nil {
+				valuesJSON[k] = x
+			} else if x, err := strconv.ParseFloat(v, 64); err == nil {
+				valuesJSON[k] = x
+			}
 		}
-		h.acc.AddFields(m.Name(), fields, m.Tags(), m.Time())
+		if t, ok := timesJSON[k]; ok {
+			if t, ok := t.(string); ok {
+				if x, err := strconv.ParseInt(t, 10, 64); err == nil {
+					timesJSON[k] =
+						time.Unix(0, x*int64(time.Millisecond))
+				}
+			}
+		}
+		log.Printf("key: \"%s\", value: %v, type: %T, time: %v, type: %T \n",
+			k, valuesJSON[k], valuesJSON[k], timesJSON[k], timesJSON[k])
 	}
 
-	return err
+	//metrics := make([]telegraf.Metric, 0)
+	//metric, err := metric.New("mango_http_listener", nil, f.Fields, time.Now().UTC())
+	////f := json_parser.JSONFlattener{}
+	//err := f.FullFlattenJSON("", jsonOut, true, true)
+	//if err != nil {
+	//	log.Println(err)
+	//}
+	//log.Println("fields: ", f.Fields)
+	//if err != nil {
+	//	return err
+	//}
+	//metrics = append(metrics, metric)
+
+	//log.Println("metrics: ", metrics)
+
+	//for _, m := range metrics {
+	//	fields := make(map[string]interface{})
+	//	for k, v := range m.Fields() {
+	//		fields[k] = v
+	//	}
+	//	h.acc.AddFields(m.Name(), fields, m.Tags(), m.Time())
+	//}
+
+	return nil //err
 }
 
 func tooLarge(res http.ResponseWriter) {
