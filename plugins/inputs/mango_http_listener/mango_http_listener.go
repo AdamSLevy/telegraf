@@ -48,6 +48,8 @@ type MangoHTTPListener struct {
 	TlsCert           string
 	TlsKey            string
 
+	TagKeys []string
+
 	mu sync.Mutex
 	wg sync.WaitGroup
 
@@ -68,6 +70,8 @@ type MangoHTTPListener struct {
 	NotFoundsServed selfstat.Stat
 	BuffersCreated  selfstat.Stat
 }
+
+const defaultName = "mango_http_listener"
 
 const sampleConfig = `
   ## Address and port to host HTTP listener on
@@ -93,6 +97,12 @@ const sampleConfig = `
   ## Add service certificate and key
   tls_cert = "/etc/telegraf/cert.pem"
   tls_key = "/etc/telegraf/key.pem"
+
+  ## List of tag names to extract from top-level of JSON server response
+  # tag_keys = [
+  #   "site",
+  #   "data_source"
+  # ]
 `
 
 func (h *MangoHTTPListener) SampleConfig() string {
@@ -303,7 +313,7 @@ func (h *MangoHTTPListener) serveWrite(res http.ResponseWriter, req *http.Reques
 		i := bytes.LastIndexByte(buf, '\n')
 		if i == -1 {
 			// drop any line longer than the max buffer size
-			log.Printf("E! http_listener_json received a single line longer than the maximum of %d bytes",
+			log.Printf("E! mango_http_listener received a single line longer than the maximum of %d bytes",
 				len(buf))
 			hangingBytes = true
 			return400 = true
@@ -337,59 +347,50 @@ func (h *MangoHTTPListener) parse(b []byte, t time.Time, precision string) error
 	var timesJSON map[string]interface{}
 	json.Unmarshal(valuesBytes, &valuesJSON)
 	json.Unmarshal(timesBytes, &timesJSON)
-	log.Printf("original JSON: %s\n", b)
-	log.Printf("values JSON:   %s\n", valuesJSON)
-	log.Printf("times JSON:    %s\n", timesJSON)
+	//log.Printf("original JSON: %s\n", b)
+	//log.Printf("values JSON:   %s\n", valuesJSON)
+	//log.Printf("times JSON:    %s\n", timesJSON)
 
 	// Extract Tags
+	tags := make(map[string]string)
+	for _, tag := range h.TagKeys {
+		switch v := valuesJSON[tag].(type) {
+		case string:
+			tags[tag] = v
+		case bool:
+			tags[tag] = strconv.FormatBool(v)
+		case float64:
+			tags[tag] = strconv.FormatFloat(v, 'f', -1, 64)
+		}
+		delete(valuesJSON, tag)
+		delete(timesJSON, tag)
+	}
 
 	// All values and times are strings, convert to correct type
 	for k, v := range valuesJSON {
+		fields := make(map[string]interface{})
 		if v, ok := v.(string); ok {
 			if x, err := strconv.ParseBool(v); err == nil {
-				valuesJSON[k] = x
+				fields[k] = x
 			} else if x, err := strconv.ParseInt(v, 10, 64); err == nil {
-				valuesJSON[k] = x
+				fields[k] = x
 			} else if x, err := strconv.ParseFloat(v, 64); err == nil {
-				valuesJSON[k] = x
+				fields[k] = x
 			}
 		}
 		if t, ok := timesJSON[k]; ok {
 			if t, ok := t.(string); ok {
 				if x, err := strconv.ParseInt(t, 10, 64); err == nil {
-					timesJSON[k] =
-						time.Unix(0, x*int64(time.Millisecond))
+					h.acc.AddFields(defaultName, fields, tags,
+						time.Unix(0, x*int64(time.Millisecond)))
 				}
 			}
 		}
-		log.Printf("key: \"%s\", value: %v, type: %T, time: %v, type: %T \n",
-			k, valuesJSON[k], valuesJSON[k], timesJSON[k], timesJSON[k])
+		//log.Printf("time: %v, key: \"%s\", value: %v, type: %T\n",
+		//	timesJSON[k], k, valuesJSON[k], valuesJSON[k])
 	}
 
-	//metrics := make([]telegraf.Metric, 0)
-	//metric, err := metric.New("mango_http_listener", nil, f.Fields, time.Now().UTC())
-	////f := json_parser.JSONFlattener{}
-	//err := f.FullFlattenJSON("", jsonOut, true, true)
-	//if err != nil {
-	//	log.Println(err)
-	//}
-	//log.Println("fields: ", f.Fields)
-	//if err != nil {
-	//	return err
-	//}
-	//metrics = append(metrics, metric)
-
-	//log.Println("metrics: ", metrics)
-
-	//for _, m := range metrics {
-	//	fields := make(map[string]interface{})
-	//	for k, v := range m.Fields() {
-	//		fields[k] = v
-	//	}
-	//	h.acc.AddFields(m.Name(), fields, m.Tags(), m.Time())
-	//}
-
-	return nil //err
+	return nil
 }
 
 func tooLarge(res http.ResponseWriter) {
@@ -439,7 +440,7 @@ func (h *MangoHTTPListener) getTLSConfig() *tls.Config {
 }
 
 func init() {
-	inputs.Add("http_listener_json", func() telegraf.Input {
+	inputs.Add("mango_http_listener", func() telegraf.Input {
 		return &MangoHTTPListener{
 			ServiceAddress: ":8186",
 		}
