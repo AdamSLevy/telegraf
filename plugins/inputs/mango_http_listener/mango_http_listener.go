@@ -1,22 +1,24 @@
-package http_listener
+package mango_http_listener
 
 import (
 	"bytes"
 	"compress/gzip"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/json"
 	"io"
 	"io/ioutil"
 	"log"
 	"net"
 	"net/http"
+	"regexp"
 	"sync"
 	"time"
 
 	"github.com/influxdata/telegraf"
 	"github.com/influxdata/telegraf/internal"
 	"github.com/influxdata/telegraf/plugins/inputs"
-	"github.com/influxdata/telegraf/plugins/parsers/influx"
+	"github.com/influxdata/telegraf/plugins/parsers"
 	"github.com/influxdata/telegraf/selfstat"
 )
 
@@ -32,7 +34,7 @@ const (
 	DEFAULT_MAX_LINE_SIZE = 64 * 1024
 )
 
-type HTTPListener struct {
+type MangoHTTPListener struct {
 	ServiceAddress string
 	ReadTimeout    internal.Duration
 	WriteTimeout   internal.Duration
@@ -49,7 +51,7 @@ type HTTPListener struct {
 
 	listener net.Listener
 
-	parser influx.InfluxParser
+	parser parsers.Parser
 	acc    telegraf.Accumulator
 	pool   *pool
 
@@ -92,38 +94,38 @@ const sampleConfig = `
   tls_key = "/etc/telegraf/key.pem"
 `
 
-func (h *HTTPListener) SampleConfig() string {
+func (h *MangoHTTPListener) SampleConfig() string {
 	return sampleConfig
 }
 
-func (h *HTTPListener) Description() string {
+func (h *MangoHTTPListener) Description() string {
 	return "Influx HTTP write listener"
 }
 
-func (h *HTTPListener) Gather(_ telegraf.Accumulator) error {
+func (h *MangoHTTPListener) Gather(_ telegraf.Accumulator) error {
 	h.BuffersCreated.Set(h.pool.ncreated())
 	return nil
 }
 
 // Start starts the http listener service.
-func (h *HTTPListener) Start(acc telegraf.Accumulator) error {
+func (h *MangoHTTPListener) Start(acc telegraf.Accumulator) error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
 	tags := map[string]string{
 		"address": h.ServiceAddress,
 	}
-	h.BytesRecv = selfstat.Register("http_listener", "bytes_received", tags)
-	h.RequestsServed = selfstat.Register("http_listener", "requests_served", tags)
-	h.WritesServed = selfstat.Register("http_listener", "writes_served", tags)
-	h.QueriesServed = selfstat.Register("http_listener", "queries_served", tags)
-	h.PingsServed = selfstat.Register("http_listener", "pings_served", tags)
-	h.RequestsRecv = selfstat.Register("http_listener", "requests_received", tags)
-	h.WritesRecv = selfstat.Register("http_listener", "writes_received", tags)
-	h.QueriesRecv = selfstat.Register("http_listener", "queries_received", tags)
-	h.PingsRecv = selfstat.Register("http_listener", "pings_received", tags)
-	h.NotFoundsServed = selfstat.Register("http_listener", "not_founds_served", tags)
-	h.BuffersCreated = selfstat.Register("http_listener", "buffers_created", tags)
+	h.BytesRecv = selfstat.Register("http_listener_json", "bytes_received", tags)
+	h.RequestsServed = selfstat.Register("http_listener_json", "requests_served", tags)
+	h.WritesServed = selfstat.Register("http_listener_json", "writes_served", tags)
+	h.QueriesServed = selfstat.Register("http_listener_json", "queries_served", tags)
+	h.PingsServed = selfstat.Register("http_listener_json", "pings_served", tags)
+	h.RequestsRecv = selfstat.Register("http_listener_json", "requests_received", tags)
+	h.WritesRecv = selfstat.Register("http_listener_json", "writes_received", tags)
+	h.QueriesRecv = selfstat.Register("http_listener_json", "queries_received", tags)
+	h.PingsRecv = selfstat.Register("http_listener_json", "pings_received", tags)
+	h.NotFoundsServed = selfstat.Register("http_listener_json", "not_founds_served", tags)
+	h.BuffersCreated = selfstat.Register("http_listener_json", "buffers_created", tags)
 
 	if h.MaxBodySize == 0 {
 		h.MaxBodySize = DEFAULT_MAX_BODY_SIZE
@@ -177,7 +179,7 @@ func (h *HTTPListener) Start(acc telegraf.Accumulator) error {
 }
 
 // Stop cleans up all resources
-func (h *HTTPListener) Stop() {
+func (h *MangoHTTPListener) Stop() {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
@@ -187,7 +189,7 @@ func (h *HTTPListener) Stop() {
 	log.Println("I! Stopped HTTP listener service on ", h.ServiceAddress)
 }
 
-func (h *HTTPListener) ServeHTTP(res http.ResponseWriter, req *http.Request) {
+func (h *MangoHTTPListener) ServeHTTP(res http.ResponseWriter, req *http.Request) {
 	h.RequestsRecv.Incr(1)
 	defer h.RequestsServed.Incr(1)
 	switch req.URL.Path {
@@ -216,7 +218,7 @@ func (h *HTTPListener) ServeHTTP(res http.ResponseWriter, req *http.Request) {
 	}
 }
 
-func (h *HTTPListener) serveWrite(res http.ResponseWriter, req *http.Request) {
+func (h *MangoHTTPListener) serveWrite(res http.ResponseWriter, req *http.Request) {
 	// Check that the content length is not too large for us to handle.
 	if req.ContentLength > h.MaxBodySize {
 		tooLarge(res)
@@ -300,7 +302,7 @@ func (h *HTTPListener) serveWrite(res http.ResponseWriter, req *http.Request) {
 		i := bytes.LastIndexByte(buf, '\n')
 		if i == -1 {
 			// drop any line longer than the max buffer size
-			log.Printf("E! http_listener received a single line longer than the maximum of %d bytes",
+			log.Printf("E! http_listener_json received a single line longer than the maximum of %d bytes",
 				len(buf))
 			hangingBytes = true
 			return400 = true
@@ -320,11 +322,22 @@ func (h *HTTPListener) serveWrite(res http.ResponseWriter, req *http.Request) {
 	}
 }
 
-func (h *HTTPListener) parse(b []byte, t time.Time, precision string) error {
-	metrics, err := h.parser.ParseWithDefaultTimePrecision(b, t, precision)
+func (h *MangoHTTPListener) parse(b []byte, t time.Time, precision string) error {
+	log.Printf("JSON: %s\n", b)
+	r := regexp.MustCompile(`@\d+"`)
+	b = []byte(r.ReplaceAllString(string(b), `"`))
+	log.Printf("JSON: %s\n", b)
+
+	metrics, err := h.parser.Parse(b)
+
+	log.Println("metrics", metrics)
 
 	for _, m := range metrics {
-		h.acc.AddFields(m.Name(), m.Fields(), m.Tags(), m.Time())
+		fields := make(map[string]interface{})
+		for k, v := range m.Fields() {
+			fields[k] = v
+		}
+		h.acc.AddFields(m.Name(), fields, m.Tags(), m.Time())
 	}
 
 	return err
@@ -344,7 +357,7 @@ func badRequest(res http.ResponseWriter) {
 	res.Write([]byte(`{"error":"http: bad request"}`))
 }
 
-func (h *HTTPListener) getTLSConfig() *tls.Config {
+func (h *MangoHTTPListener) getTLSConfig() *tls.Config {
 	tlsConf := &tls.Config{
 		InsecureSkipVerify: false,
 		Renegotiation:      tls.RenegotiateNever,
@@ -377,9 +390,11 @@ func (h *HTTPListener) getTLSConfig() *tls.Config {
 }
 
 func init() {
-	inputs.Add("http_listener", func() telegraf.Input {
-		return &HTTPListener{
+	parser, _ := parsers.NewJSONParser("http_listener_json", nil, nil)
+	inputs.Add("http_listener_json", func() telegraf.Input {
+		return &MangoHTTPListener{
 			ServiceAddress: ":8186",
+			parser:         parser,
 		}
 	})
 }

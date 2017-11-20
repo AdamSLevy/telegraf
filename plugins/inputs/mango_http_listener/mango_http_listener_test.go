@@ -1,4 +1,4 @@
-package http_listener
+package mango_http_listener
 
 import (
 	"bytes"
@@ -112,14 +112,14 @@ var (
 	serviceKeyFile       string
 )
 
-func newTestHTTPListener() *HTTPListener {
-	listener := &HTTPListener{
+func newTestMangoHTTPListener() *MangoHTTPListener {
+	listener := &MangoHTTPListener{
 		ServiceAddress: ":0",
 	}
 	return listener
 }
 
-func newTestHTTPSListener() *HTTPListener {
+func newTestHTTPSListener() *MangoHTTPListener {
 	initServiceCertFiles.Do(func() {
 		acaf, err := ioutil.TempFile("", "allowedCAFile.crt")
 		if err != nil {
@@ -154,7 +154,7 @@ func newTestHTTPSListener() *HTTPListener {
 		serviceKeyFile = skf.Name()
 	})
 
-	listener := &HTTPListener{
+	listener := &MangoHTTPListener{
 		ServiceAddress:    ":0",
 		TlsAllowedCacerts: allowedCAFiles,
 		TlsCert:           serviceCertFile,
@@ -189,7 +189,7 @@ func getHTTPSClient() *http.Client {
 	return client
 }
 
-func createURL(listener *HTTPListener, scheme string, path string, rawquery string) string {
+func createURL(listener *MangoHTTPListener, scheme string, path string, rawquery string) string {
 	u := url.URL{
 		Scheme:   scheme,
 		Host:     "localhost:" + strconv.Itoa(listener.Port),
@@ -239,7 +239,7 @@ func TestWriteHTTPSWithClientAuth(t *testing.T) {
 }
 
 func TestWriteHTTP(t *testing.T) {
-	listener := newTestHTTPListener()
+	listener := newTestMangoHTTPListener()
 
 	acc := &testutil.Accumulator{}
 	require.NoError(t, listener.Start(acc))
@@ -288,7 +288,7 @@ func TestWriteHTTP(t *testing.T) {
 
 // http listener should add a newline at the end of the buffer if it's not there
 func TestWriteHTTPNoNewline(t *testing.T) {
-	listener := newTestHTTPListener()
+	listener := newTestMangoHTTPListener()
 
 	acc := &testutil.Accumulator{}
 	require.NoError(t, listener.Start(acc))
@@ -308,7 +308,7 @@ func TestWriteHTTPNoNewline(t *testing.T) {
 }
 
 func TestWriteHTTPMaxLineSizeIncrease(t *testing.T) {
-	listener := &HTTPListener{
+	listener := &MangoHTTPListener{
 		ServiceAddress: ":0",
 		MaxLineSize:    128 * 1000,
 	}
@@ -325,7 +325,7 @@ func TestWriteHTTPMaxLineSizeIncrease(t *testing.T) {
 }
 
 func TestWriteHTTPVerySmallMaxBody(t *testing.T) {
-	listener := &HTTPListener{
+	listener := &MangoHTTPListener{
 		ServiceAddress: ":0",
 		MaxBodySize:    4096,
 	}
@@ -341,7 +341,7 @@ func TestWriteHTTPVerySmallMaxBody(t *testing.T) {
 }
 
 func TestWriteHTTPVerySmallMaxLineSize(t *testing.T) {
-	listener := &HTTPListener{
+	listener := &MangoHTTPListener{
 		ServiceAddress: ":0",
 		MaxLineSize:    70,
 	}
@@ -367,7 +367,7 @@ func TestWriteHTTPVerySmallMaxLineSize(t *testing.T) {
 }
 
 func TestWriteHTTPLargeLinesSkipped(t *testing.T) {
-	listener := &HTTPListener{
+	listener := &MangoHTTPListener{
 		ServiceAddress: ":0",
 		MaxLineSize:    100,
 	}
@@ -394,7 +394,7 @@ func TestWriteHTTPLargeLinesSkipped(t *testing.T) {
 
 // test that writing gzipped data works
 func TestWriteHTTPGzippedData(t *testing.T) {
-	listener := newTestHTTPListener()
+	listener := newTestMangoHTTPListener()
 
 	acc := &testutil.Accumulator{}
 	require.NoError(t, listener.Start(acc))
@@ -425,7 +425,7 @@ func TestWriteHTTPGzippedData(t *testing.T) {
 
 // writes 25,000 metrics to the listener with 10 different writers
 func TestWriteHTTPHighTraffic(t *testing.T) {
-	listener := newTestHTTPListener()
+	listener := newTestMangoHTTPListener()
 
 	acc := &testutil.Accumulator{}
 	require.NoError(t, listener.Start(acc))
@@ -454,7 +454,7 @@ func TestWriteHTTPHighTraffic(t *testing.T) {
 }
 
 func TestReceive404ForInvalidEndpoint(t *testing.T) {
-	listener := newTestHTTPListener()
+	listener := newTestMangoHTTPListener()
 
 	acc := &testutil.Accumulator{}
 	require.NoError(t, listener.Start(acc))
@@ -468,7 +468,7 @@ func TestReceive404ForInvalidEndpoint(t *testing.T) {
 }
 
 func TestWriteHTTPInvalid(t *testing.T) {
-	listener := newTestHTTPListener()
+	listener := newTestMangoHTTPListener()
 
 	acc := &testutil.Accumulator{}
 	require.NoError(t, listener.Start(acc))
@@ -482,7 +482,7 @@ func TestWriteHTTPInvalid(t *testing.T) {
 }
 
 func TestWriteHTTPEmpty(t *testing.T) {
-	listener := newTestHTTPListener()
+	listener := newTestMangoHTTPListener()
 
 	acc := &testutil.Accumulator{}
 	require.NoError(t, listener.Start(acc))
@@ -496,7 +496,7 @@ func TestWriteHTTPEmpty(t *testing.T) {
 }
 
 func TestQueryAndPingHTTP(t *testing.T) {
-	listener := newTestHTTPListener()
+	listener := newTestMangoHTTPListener()
 
 	acc := &testutil.Accumulator{}
 	require.NoError(t, listener.Start(acc))
@@ -516,7 +516,7 @@ func TestQueryAndPingHTTP(t *testing.T) {
 }
 
 func TestWriteWithPrecision(t *testing.T) {
-	listener := newTestHTTPListener()
+	listener := newTestMangoHTTPListener()
 
 	acc := &testutil.Accumulator{}
 	require.NoError(t, listener.Start(acc))
