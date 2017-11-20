@@ -17,8 +17,9 @@ import (
 
 	"github.com/influxdata/telegraf"
 	"github.com/influxdata/telegraf/internal"
+	"github.com/influxdata/telegraf/metric"
 	"github.com/influxdata/telegraf/plugins/inputs"
-	"github.com/influxdata/telegraf/plugins/parsers"
+	json_parser "github.com/influxdata/telegraf/plugins/parsers/json"
 	"github.com/influxdata/telegraf/selfstat"
 )
 
@@ -51,9 +52,8 @@ type MangoHTTPListener struct {
 
 	listener net.Listener
 
-	parser parsers.Parser
-	acc    telegraf.Accumulator
-	pool   *pool
+	acc  telegraf.Accumulator
+	pool *pool
 
 	BytesRecv       selfstat.Stat
 	RequestsServed  selfstat.Stat
@@ -328,9 +328,22 @@ func (h *MangoHTTPListener) parse(b []byte, t time.Time, precision string) error
 	b = []byte(r.ReplaceAllString(string(b), `"`))
 	log.Printf("JSON: %s\n", b)
 
-	metrics, err := h.parser.Parse(b)
+	f := json_parser.JSONFlattener{}
+	var jsonOut map[string]interface{}
+	json.Unmarshal(b, &jsonOut)
+	err := f.FullFlattenJSON("", jsonOut, true, true)
+	if err != nil {
+		log.Println(err)
+	}
+	log.Println("fields: ", f.Fields)
+	metrics := make([]telegraf.Metric, 0)
+	metric, err := metric.New("mango_http_listener", nil, f.Fields, time.Now().UTC())
+	if err != nil {
+		return err
+	}
+	metrics = append(metrics, metric)
 
-	log.Println("metrics", metrics)
+	log.Println("metrics: ", metrics)
 
 	for _, m := range metrics {
 		fields := make(map[string]interface{})
@@ -390,11 +403,9 @@ func (h *MangoHTTPListener) getTLSConfig() *tls.Config {
 }
 
 func init() {
-	parser, _ := parsers.NewJSONParser("http_listener_json", nil, nil)
 	inputs.Add("http_listener_json", func() telegraf.Input {
 		return &MangoHTTPListener{
 			ServiceAddress: ":8186",
-			parser:         parser,
 		}
 	})
 }
