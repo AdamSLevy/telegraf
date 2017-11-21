@@ -337,7 +337,7 @@ func (h *MangoHTTPListener) parse(b []byte, t time.Time, precision string) error
 	// Data format: {"data": "10.000@1234456667", "data2":"144@12345566"}
 
 	// Unmarshall two copies of the JSON, one of the timestamp and one of the value
-	regValues := regexp.MustCompile(`"[\d\.]+@`) // Matches values
+	regValues := regexp.MustCompile(`"[\w\.]+@`) // Matches values
 	regTimes := regexp.MustCompile(`@\d+"`)      // Matches timestamps
 
 	valuesBytes := []byte(regTimes.ReplaceAllString(string(b), `"`))
