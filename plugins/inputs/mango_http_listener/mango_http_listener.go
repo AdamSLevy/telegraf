@@ -18,9 +18,7 @@ import (
 
 	"github.com/influxdata/telegraf"
 	"github.com/influxdata/telegraf/internal"
-	//"github.com/influxdata/telegraf/metric"
 	"github.com/influxdata/telegraf/plugins/inputs"
-	//json_parser "github.com/influxdata/telegraf/plugins/parsers/json"
 	"github.com/influxdata/telegraf/selfstat"
 )
 
@@ -49,6 +47,7 @@ type MangoHTTPListener struct {
 	TlsKey            string
 
 	TagKeys []string
+	Fields  []field_t
 
 	mu sync.Mutex
 	wg sync.WaitGroup
@@ -71,11 +70,17 @@ type MangoHTTPListener struct {
 	BuffersCreated  selfstat.Stat
 }
 
+type field_t struct {
+	MangoJSONKey string            `toml:"mango_json_key"`
+	FieldKey     string            `toml:"field_key"`
+	Tags         map[string]string `toml:"tags"`
+}
+
 const defaultName = "mango_http_listener"
 
 const sampleConfig = `
   ## Address and port to host HTTP listener on
-  service_address = ":8186"
+  service_address = ":50505"
 
   ## maximum duration before timing out read of the request
   read_timeout = "10s"
@@ -98,12 +103,32 @@ const sampleConfig = `
   tls_cert = "/etc/telegraf/cert.pem"
   tls_key = "/etc/telegraf/key.pem"
 
-  ## List of tag names to extract from top-level of JSON server response
+  ## List of tag names to extract from JSON POSTed by Mango
   # tag_keys = [
   #   "site",
   #   "data_source"
   # ]
+
+  ## Fields and tag key/value pairs
+  # [[ inputs.mango_http_listener.fields ]]
+  #   mango_json_key = "Modbus Data Point 1" # Required to match a JSON key
+  #   field_key = "pump_pressure"	     # Defaults to mango_field_key
+  #   [[ inputs.mango_http_listener.fields.tags ]] # Optonal 
+  #     data_source = "modbus"
+  #     unit = "psi"
 `
+
+type errorID uint
+
+const (
+	parseTimestamp errorID = iota
+	noTimestamp    errorID = iota
+)
+
+var errorStrings = map[errorID]string{
+	parseTimestamp: "E! Invalid timestamp. Expected Unix UTC millisecond timestamp.",
+	noTimestamp:    "E! No timestamp.",
+}
 
 func (h *MangoHTTPListener) SampleConfig() string {
 	return sampleConfig
@@ -335,7 +360,6 @@ func (h *MangoHTTPListener) serveWrite(res http.ResponseWriter, req *http.Reques
 
 func (h *MangoHTTPListener) parse(b []byte, t time.Time, precision string) error {
 	// Data format: {"data": "10.000@1234456667", "data2":"144@12345566"}
-
 	// Unmarshall two copies of the JSON, one of the timestamp and one of the value
 	regValues := regexp.MustCompile(`"[\w\.]+@`) // Matches values
 	regTimes := regexp.MustCompile(`@\d+"`)      // Matches timestamps
@@ -351,43 +375,66 @@ func (h *MangoHTTPListener) parse(b []byte, t time.Time, precision string) error
 	//log.Printf("values JSON:   %s\n", valuesJSON)
 	//log.Printf("times JSON:    %s\n", timesJSON)
 
-	// Extract Tags
-	tags := make(map[string]string)
-	for _, tag := range h.TagKeys {
-		switch v := valuesJSON[tag].(type) {
+	// Extract TagKeys from JSON
+	JSONTags := make(map[string]string)
+	for _, tagK := range h.TagKeys {
+		switch tagV := valuesJSON[tagK].(type) {
 		case string:
-			tags[tag] = v
+			JSONTags[tagK] = tagV
 		case bool:
-			tags[tag] = strconv.FormatBool(v)
+			JSONTags[tagK] = strconv.FormatBool(tagV)
 		case float64:
-			tags[tag] = strconv.FormatFloat(v, 'f', -1, 64)
+			JSONTags[tagK] = strconv.FormatFloat(tagV, 'f', -1, 64)
 		}
-		delete(valuesJSON, tag)
-		delete(timesJSON, tag)
+		delete(valuesJSON, tagK)
+		delete(timesJSON, tagK)
 	}
 
-	// All values and times are strings, convert to correct type
+	fieldTags := make(map[string]field_t)
+	for _, f := range h.Fields {
+		for k, v := range JSONTags {
+			if _, ok := f.Tags[k]; !ok {
+				f.Tags[k] = v
+			}
+		}
+
+		if len(f.FieldKey) == 0 {
+			f.FieldKey = f.MangoJSONKey
+		}
+		fieldTags[f.MangoJSONKey] = f
+	}
+
+	// Create metric for each value/timestamp pair, with any additional config tags.
 	for k, v := range valuesJSON {
+		f, ok := fieldTags[k]
+		if !ok {
+			f.Tags = JSONTags
+		}
+
 		fields := make(map[string]interface{})
 		if v, ok := v.(string); ok {
 			if x, err := strconv.ParseBool(v); err == nil {
-				fields[k] = x
+				fields[f.FieldKey] = x
 			} else if x, err := strconv.ParseInt(v, 10, 64); err == nil {
-				fields[k] = x
+				fields[f.FieldKey] = x
 			} else if x, err := strconv.ParseFloat(v, 64); err == nil {
-				fields[k] = x
+				fields[f.FieldKey] = x
 			}
 		}
+		var timestamp time.Time
 		if t, ok := timesJSON[k]; ok {
 			if t, ok := t.(string); ok {
 				if x, err := strconv.ParseInt(t, 10, 64); err == nil {
-					h.acc.AddFields(defaultName, fields, tags,
-						time.Unix(0, x*int64(time.Millisecond)))
+					timestamp = time.Unix(0, x*int64(time.Millisecond))
+				} else {
+					log.Println(errorStrings[parseTimestamp])
 				}
 			}
+		} else {
+			log.Println(errorStrings[noTimestamp])
 		}
-		//log.Printf("time: %v, key: \"%s\", value: %v, type: %T\n",
-		//	timesJSON[k], k, valuesJSON[k], valuesJSON[k])
+
+		h.acc.AddFields(defaultName, fields, f.Tags, timestamp)
 	}
 
 	return nil
