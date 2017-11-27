@@ -393,8 +393,10 @@ func (h *MangoHTTPListener) parse(b []byte, t time.Time, precision string) error
 	fieldTags := make(map[string]field_t)
 	for _, f := range h.Fields {
 		for k, v := range JSONTags {
-			if _, ok := f.Tags[k]; !ok {
-				f.Tags[k] = v
+			if nil != f.Tags {
+				if _, ok := f.Tags[k]; !ok {
+					f.Tags[k] = v
+				}
 			}
 		}
 
