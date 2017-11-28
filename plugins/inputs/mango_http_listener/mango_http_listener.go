@@ -2,7 +2,6 @@ package mango_http_listener
 
 import (
 	"bytes"
-	"compress/gzip"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
@@ -48,6 +47,11 @@ type MangoHTTPListener struct {
 
 	TagKeys []string
 	Fields  []field_t
+
+	IgnoreKeysWithoutConfig bool
+
+	matchValues *regexp.Regexp
+	matchTimes  *regexp.Regexp
 
 	mu sync.Mutex
 	wg sync.WaitGroup
@@ -109,33 +113,25 @@ const sampleConfig = `
   #   "data_source"
   # ]
 
+  ## Keys without a mango_json_key inside a [[ inputs.mango_http_listener.fields ]] 
+  ## will be ignored by default
+  ignore_keys_without_config = true
+
   ## Fields and tag key/value pairs
   # [[ inputs.mango_http_listener.fields ]]
   #   mango_json_key = "Modbus Data Point 1" # Required to match a JSON key
   #   field_key = "pump_pressure"	     # Defaults to mango_field_key
-  #   [[ inputs.mango_http_listener.fields.tags ]] # Optonal 
+  #   [ inputs.mango_http_listener.fields.tags ] # Optonal 
   #     data_source = "modbus"
   #     unit = "psi"
 `
-
-type errorID uint
-
-const (
-	parseTimestamp errorID = iota
-	noTimestamp    errorID = iota
-)
-
-var errorStrings = map[errorID]string{
-	parseTimestamp: "E! Invalid timestamp. Expected Unix UTC millisecond timestamp.",
-	noTimestamp:    "E! No timestamp.",
-}
 
 func (h *MangoHTTPListener) SampleConfig() string {
 	return sampleConfig
 }
 
 func (h *MangoHTTPListener) Description() string {
-	return "Influx HTTP write listener"
+	return "Listener for Mango HTTP publisher"
 }
 
 func (h *MangoHTTPListener) Gather(_ telegraf.Accumulator) error {
@@ -229,24 +225,10 @@ func (h *MangoHTTPListener) ServeHTTP(res http.ResponseWriter, req *http.Request
 	h.RequestsRecv.Incr(1)
 	defer h.RequestsServed.Incr(1)
 	switch req.URL.Path {
-	case "/write":
+	case "/":
 		h.WritesRecv.Incr(1)
 		defer h.WritesServed.Incr(1)
-		h.serveWrite(res, req)
-	case "/query":
-		h.QueriesRecv.Incr(1)
-		defer h.QueriesServed.Incr(1)
-		// Deliver a dummy response to the query endpoint, as some InfluxDB
-		// clients test endpoint availability with a query
-		res.Header().Set("Content-Type", "application/json")
-		res.Header().Set("X-Influxdb-Version", "1.0")
-		res.WriteHeader(http.StatusOK)
-		res.Write([]byte("{\"results\":[]}"))
-	case "/ping":
-		h.PingsRecv.Incr(1)
-		defer h.PingsServed.Incr(1)
-		// respond to ping requests
-		res.WriteHeader(http.StatusNoContent)
+		h.serveRoot(res, req)
 	default:
 		defer h.NotFoundsServed.Incr(1)
 		// Don't know how to respond to calls to other endpoints
@@ -254,27 +236,19 @@ func (h *MangoHTTPListener) ServeHTTP(res http.ResponseWriter, req *http.Request
 	}
 }
 
-func (h *MangoHTTPListener) serveWrite(res http.ResponseWriter, req *http.Request) {
+func (h *MangoHTTPListener) serveRoot(res http.ResponseWriter, req *http.Request) {
 	// Check that the content length is not too large for us to handle.
 	if req.ContentLength > h.MaxBodySize {
 		tooLarge(res)
 		return
 	}
-	now := time.Now()
 
-	precision := req.URL.Query().Get("precision")
-
-	// Handle gzip request bodies
+	// Error on gzip request bodies
 	body := req.Body
 	if req.Header.Get("Content-Encoding") == "gzip" {
-		var err error
-		body, err = gzip.NewReader(req.Body)
 		defer body.Close()
-		if err != nil {
-			log.Println("E! " + err.Error())
-			badRequest(res)
-			return
-		}
+		badRequest(res)
+		return
 	}
 	body = http.MaxBytesReader(res, body, h.MaxBodySize)
 
@@ -320,7 +294,7 @@ func (h *MangoHTTPListener) serveWrite(res http.ResponseWriter, req *http.Reques
 
 		if err == io.ErrUnexpectedEOF {
 			// finished reading the request body
-			if err := h.parse(buf[:n+bufStart], now, precision); err != nil {
+			if err := h.parse(buf[:n+bufStart]); err != nil {
 				log.Println("E! " + err.Error())
 				return400 = true
 			}
@@ -345,7 +319,7 @@ func (h *MangoHTTPListener) serveWrite(res http.ResponseWriter, req *http.Reques
 			bufStart = 0
 			continue
 		}
-		if err := h.parse(buf[:i+1], now, precision); err != nil {
+		if err := h.parse(buf[:i+1]); err != nil {
 			log.Println("E! " + err.Error())
 			return400 = true
 		}
@@ -358,19 +332,20 @@ func (h *MangoHTTPListener) serveWrite(res http.ResponseWriter, req *http.Reques
 	}
 }
 
-func (h *MangoHTTPListener) parse(b []byte, t time.Time, precision string) error {
+func (h *MangoHTTPListener) parse(b []byte) error {
 	// Data format: {"data": "10.000@1234456667", "data2":"144@12345566"}
 	// Unmarshall two copies of the JSON, one of the timestamp and one of the value
-	regValues := regexp.MustCompile(`"[\w\.]+@`) // Matches values
-	regTimes := regexp.MustCompile(`@\d+"`)      // Matches timestamps
-
-	valuesBytes := []byte(regTimes.ReplaceAllString(string(b), `"`))
-	timesBytes := []byte(regValues.ReplaceAllString(string(b), `"`))
+	valuesBytes := []byte(h.matchTimes.ReplaceAllString(string(b), `"`))
+	timesBytes := []byte(h.matchValues.ReplaceAllString(string(b), `"`))
 
 	var valuesJSON map[string]interface{}
 	var timesJSON map[string]interface{}
-	json.Unmarshal(valuesBytes, &valuesJSON)
-	json.Unmarshal(timesBytes, &timesJSON)
+	if err := json.Unmarshal(valuesBytes, &valuesJSON); err != nil {
+		return err
+	}
+	if err := json.Unmarshal(timesBytes, &timesJSON); err != nil {
+		return err
+	}
 	//log.Printf("original JSON: %s\n", b)
 	//log.Printf("values JSON:   %s\n", valuesJSON)
 	//log.Printf("times JSON:    %s\n", timesJSON)
@@ -390,6 +365,7 @@ func (h *MangoHTTPListener) parse(b []byte, t time.Time, precision string) error
 		delete(timesJSON, tagK)
 	}
 
+	// Remap Fields by MangoJSONKey and append JSONTags
 	fieldTags := make(map[string]field_t)
 	for _, f := range h.Fields {
 		for k, v := range JSONTags {
@@ -410,6 +386,11 @@ func (h *MangoHTTPListener) parse(b []byte, t time.Time, precision string) error
 	for k, v := range valuesJSON {
 		f, ok := fieldTags[k]
 		if !ok {
+			if h.IgnoreKeysWithoutConfig {
+				log.Printf("I! No configuration for Mango JSON key \"%s\"\n", k)
+				continue
+			}
+			f.FieldKey = k
 			f.Tags = JSONTags
 		}
 
@@ -429,11 +410,13 @@ func (h *MangoHTTPListener) parse(b []byte, t time.Time, precision string) error
 				if x, err := strconv.ParseInt(t, 10, 64); err == nil {
 					timestamp = time.Unix(0, x*int64(time.Millisecond))
 				} else {
-					log.Println(errorStrings[parseTimestamp])
+					log.Println("E! Invalid timestamp. Expected Unix UTC millisecond timestamp.")
+					continue
 				}
 			}
 		} else {
-			log.Println(errorStrings[noTimestamp])
+			log.Println("E! No timestamp.")
+			continue
 		}
 
 		h.acc.AddFields(defaultName, fields, f.Tags, timestamp)
@@ -492,6 +475,10 @@ func init() {
 	inputs.Add("mango_http_listener", func() telegraf.Input {
 		return &MangoHTTPListener{
 			ServiceAddress: ":8186",
+			matchValues:    regexp.MustCompile(`"[\w\.]+@`),
+			matchTimes:     regexp.MustCompile(`@\d+"`),
+
+			IgnoreKeysWithoutConfig: true,
 		}
 	})
 }
