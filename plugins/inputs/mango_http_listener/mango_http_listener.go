@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
+	"fmt"
 	"io"
 	"io/ioutil"
 	"log"
@@ -46,9 +47,11 @@ type MangoHTTPListener struct {
 	TlsKey            string
 
 	TagKeys []string
-	Fields  []field_t
+	Fields  []*field_t
+	fields  map[string]*field_t
 
 	IgnoreKeysWithoutConfig bool
+	RequireMeasurementName  bool
 
 	matchValues *regexp.Regexp
 	matchTimes  *regexp.Regexp
@@ -64,26 +67,23 @@ type MangoHTTPListener struct {
 	BytesRecv       selfstat.Stat
 	RequestsServed  selfstat.Stat
 	WritesServed    selfstat.Stat
-	QueriesServed   selfstat.Stat
-	PingsServed     selfstat.Stat
 	RequestsRecv    selfstat.Stat
 	WritesRecv      selfstat.Stat
-	QueriesRecv     selfstat.Stat
-	PingsRecv       selfstat.Stat
 	NotFoundsServed selfstat.Stat
 	BuffersCreated  selfstat.Stat
 }
 
 type field_t struct {
-	MangoJSONKey string            `toml:"mango_json_key"`
-	FieldKey     string            `toml:"field_key"`
-	Tags         map[string]string `toml:"tags"`
+	MeasurementName string
+	MangoJSONKey    string `toml:"mango_json_key"`
+	FieldKey        string
+	Tags            map[string]string
 }
 
 const defaultName = "mango_http_listener"
 
 const sampleConfig = `
-  ## Address and port to host HTTP listener on
+  ## Address and port to host Mango HTTP listener on
   service_address = ":50505"
 
   ## maximum duration before timing out read of the request
@@ -113,14 +113,19 @@ const sampleConfig = `
   #   "data_source"
   # ]
 
-  ## Keys without a mango_json_key inside a [[ inputs.mango_http_listener.fields ]] 
-  ## will be ignored by default
-  ignore_keys_without_config = true
+  ## Ignore Mango JSON keys without an [[ inputs.mango_http_listener.fields ]]
+  ## section
+  ignore_keys_without_config = true	# Default
+
+  ## Require all [[ input.mango_http_listener.fields ]] to have a
+  ## measurement_name specified. Telegraf will fail to run otherwise.
+  require_measurement_name = true	# Default
 
   ## Fields and tag key/value pairs
   # [[ inputs.mango_http_listener.fields ]]
   #   mango_json_key = "Modbus Data Point 1" # Required to match a JSON key
   #   field_key = "pump_pressure"	     # Defaults to mango_field_key
+  #   measurement_name = "alpat"	     # Defaults to "http_mango_listener"
   #   [ inputs.mango_http_listener.fields.tags ] # Optonal 
   #     data_source = "modbus"
   #     unit = "psi"
@@ -150,12 +155,8 @@ func (h *MangoHTTPListener) Start(acc telegraf.Accumulator) error {
 	h.BytesRecv = selfstat.Register("mango_http_listener", "bytes_received", tags)
 	h.RequestsServed = selfstat.Register("mango_http_listener", "requests_served", tags)
 	h.WritesServed = selfstat.Register("mango_http_listener", "writes_served", tags)
-	h.QueriesServed = selfstat.Register("mango_http_listener", "queries_served", tags)
-	h.PingsServed = selfstat.Register("mango_http_listener", "pings_served", tags)
 	h.RequestsRecv = selfstat.Register("mango_http_listener", "requests_received", tags)
 	h.WritesRecv = selfstat.Register("mango_http_listener", "writes_received", tags)
-	h.QueriesRecv = selfstat.Register("mango_http_listener", "queries_received", tags)
-	h.PingsRecv = selfstat.Register("mango_http_listener", "pings_received", tags)
 	h.NotFoundsServed = selfstat.Register("mango_http_listener", "not_founds_served", tags)
 	h.BuffersCreated = selfstat.Register("mango_http_listener", "buffers_created", tags)
 
@@ -171,6 +172,23 @@ func (h *MangoHTTPListener) Start(acc telegraf.Accumulator) error {
 	}
 	if h.WriteTimeout.Duration < time.Second {
 		h.WriteTimeout.Duration = time.Second * 10
+	}
+
+	// Remap Fields by MangoJSONKey
+	for i, f := range h.Fields {
+		if len(f.MangoJSONKey) == 0 {
+			return fmt.Errorf("Missing mango_json_key in fields entry number %d", i)
+		}
+		if len(f.FieldKey) == 0 {
+			f.FieldKey = f.MangoJSONKey
+		}
+		if len(f.MeasurementName) == 0 {
+			if h.RequireMeasurementName {
+				return fmt.Errorf("No measurement_name for 'mango_json_key: \"%s\"'", f.MangoJSONKey)
+			}
+			f.MeasurementName = defaultName
+		}
+		h.fields[f.MangoJSONKey] = f
 	}
 
 	h.acc = acc
@@ -205,7 +223,7 @@ func (h *MangoHTTPListener) Start(acc telegraf.Accumulator) error {
 		server.Serve(h.listener)
 	}()
 
-	log.Printf("I! Started HTTP listener service on %s\n", h.ServiceAddress)
+	log.Printf("I! Started Mango HTTP listener service on %s\n", h.ServiceAddress)
 
 	return nil
 }
@@ -218,7 +236,7 @@ func (h *MangoHTTPListener) Stop() {
 	h.listener.Close()
 	h.wg.Wait()
 
-	log.Println("I! Stopped HTTP listener service on ", h.ServiceAddress)
+	log.Println("I! Stopped Mango HTTP listener service on ", h.ServiceAddress)
 }
 
 func (h *MangoHTTPListener) ServeHTTP(res http.ResponseWriter, req *http.Request) {
@@ -365,33 +383,26 @@ func (h *MangoHTTPListener) parse(b []byte) error {
 		delete(timesJSON, tagK)
 	}
 
-	// Remap Fields by MangoJSONKey and append JSONTags
-	fieldTags := make(map[string]field_t)
-	for _, f := range h.Fields {
-		for k, v := range JSONTags {
-			if nil != f.Tags {
-				if _, ok := f.Tags[k]; !ok {
-					f.Tags[k] = v
-				}
-			}
-		}
-
-		if len(f.FieldKey) == 0 {
-			f.FieldKey = f.MangoJSONKey
-		}
-		fieldTags[f.MangoJSONKey] = f
-	}
-
 	// Create metric for each value/timestamp pair, with any additional config tags.
 	for k, v := range valuesJSON {
-		f, ok := fieldTags[k]
+		f, ok := h.fields[k]
 		if !ok {
 			if h.IgnoreKeysWithoutConfig {
 				log.Printf("I! No configuration for Mango JSON key \"%s\"\n", k)
 				continue
 			}
+			f.MeasurementName = defaultName
 			f.FieldKey = k
-			f.Tags = JSONTags
+		}
+
+		tags := make(map[string]string)
+		for k, v := range JSONTags {
+			tags[k] = v
+		}
+		if f.Tags != nil {
+			for k, v := range f.Tags {
+				tags[k] = v
+			}
 		}
 
 		fields := make(map[string]interface{})
@@ -419,7 +430,7 @@ func (h *MangoHTTPListener) parse(b []byte) error {
 			continue
 		}
 
-		h.acc.AddFields(defaultName, fields, f.Tags, timestamp)
+		h.acc.AddFields(f.MeasurementName, fields, tags, timestamp)
 	}
 
 	return nil
@@ -475,10 +486,14 @@ func init() {
 	inputs.Add("mango_http_listener", func() telegraf.Input {
 		return &MangoHTTPListener{
 			ServiceAddress: ":8186",
-			matchValues:    regexp.MustCompile(`"[\w\.]+@`),
-			matchTimes:     regexp.MustCompile(`@\d+"`),
 
 			IgnoreKeysWithoutConfig: true,
+			RequireMeasurementName:  true,
+
+			matchValues: regexp.MustCompile(`"[\w\.]+@`),
+			matchTimes:  regexp.MustCompile(`@\d+"`),
+
+			fields: make(map[string]*field_t),
 		}
 	})
 }

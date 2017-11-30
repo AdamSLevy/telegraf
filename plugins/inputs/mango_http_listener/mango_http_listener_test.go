@@ -18,27 +18,30 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func setUpTestListener(l *MangoHTTPListener, ignore bool, tagKeys []string, fields []field_t) {
+func setUpTestListener(l *MangoHTTPListener, ignore bool, tagKeys []string, fields []*field_t) {
 	l.IgnoreKeysWithoutConfig = ignore
 	l.TagKeys = tagKeys
 	l.Fields = fields
+	l.RequireMeasurementName = true
+
+	l.fields = make(map[string]*field_t)
 }
 
 var testTagKeys = []string{"organization"}
-var testFields = []field_t{
+var testFields = []*field_t{
 	{
-		MangoJSONKey: "Creekwood EZPLC1 - Chlorine Level",
-		FieldKey:     "chlorine_level",
+		MeasurementName: "creekwood",
+		MangoJSONKey:    "Creekwood EZPLC1 - Chlorine Level",
+		FieldKey:        "chlorine_level",
 		Tags: map[string]string{
-			"site":        "Creekwood",
 			"data_source": "EZPLC1",
 		},
 	},
 	{
-		MangoJSONKey: "Alpat - Total",
-		FieldKey:     "total_production",
+		MeasurementName: "alpat",
+		MangoJSONKey:    "Alpat - Total",
+		FieldKey:        "total_production",
 		Tags: map[string]string{
-			"site":        "Alpat",
 			"data_source": "DigiConnect",
 		},
 	},
@@ -280,13 +283,13 @@ func TestWriteHTTP(t *testing.T) {
 	require.EqualValues(t, 204, resp.StatusCode)
 
 	acc.Wait(1)
-	acc.AssertContainsTaggedFields(t, "mango_http_listener",
+	acc.AssertContainsTaggedFields(t, "creekwood",
 		map[string]interface{}{"chlorine_level": float64(1.4526425409317016)},
-		map[string]string{"organization": "NUS", "site": "Creekwood", "data_source": "EZPLC1"},
+		map[string]string{"organization": "NUS", "data_source": "EZPLC1"},
 	)
-	acc.AssertContainsTaggedFields(t, "mango_http_listener",
+	acc.AssertContainsTaggedFields(t, "alpat",
 		map[string]interface{}{"total_production": float64(2.0335159e7)},
-		map[string]string{"organization": "NUS", "site": "Alpat", "data_source": "DigiConnect"},
+		map[string]string{"organization": "NUS", "data_source": "DigiConnect"},
 	)
 }
 
@@ -305,13 +308,13 @@ func TestWriteHTTPNoNewline(t *testing.T) {
 	require.EqualValues(t, 204, resp.StatusCode)
 
 	acc.Wait(1)
-	acc.AssertContainsTaggedFields(t, "mango_http_listener",
+	acc.AssertContainsTaggedFields(t, "creekwood",
 		map[string]interface{}{"chlorine_level": float64(1.4526425409317016)},
-		map[string]string{"organization": "NUS", "site": "Creekwood", "data_source": "EZPLC1"},
+		map[string]string{"organization": "NUS", "data_source": "EZPLC1"},
 	)
-	acc.AssertContainsTaggedFields(t, "mango_http_listener",
+	acc.AssertContainsTaggedFields(t, "alpat",
 		map[string]interface{}{"total_production": float64(2.0335159e7)},
-		map[string]string{"organization": "NUS", "site": "Alpat", "data_source": "DigiConnect"},
+		map[string]string{"organization": "NUS", "data_source": "DigiConnect"},
 	)
 }
 
