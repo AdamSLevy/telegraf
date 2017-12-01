@@ -289,7 +289,7 @@ func (h *MangoHTTPListener) serveRoot(res http.ResponseWriter, req *http.Request
 			if return400 {
 				badRequest(res)
 			} else {
-				res.WriteHeader(http.StatusNoContent)
+				res.WriteHeader(http.StatusOK)
 			}
 			return
 		}
@@ -319,7 +319,7 @@ func (h *MangoHTTPListener) serveRoot(res http.ResponseWriter, req *http.Request
 			if return400 {
 				badRequest(res)
 			} else {
-				res.WriteHeader(http.StatusNoContent)
+				res.WriteHeader(http.StatusOK)
 			}
 			return
 		}
