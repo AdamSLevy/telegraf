@@ -33,11 +33,11 @@ type channel_t struct {
 	Credentials map[string]string
 }
 
-func (sl *GdaxWebsocket) Description() string {
+func (gx *GdaxWebsocket) Description() string {
 	return "Subscribes to channels on the GDAX websocket"
 }
 
-func (sl *GdaxWebsocket) SampleConfig() string {
+func (gx *GdaxWebsocket) SampleConfig() string {
 	return `
   ## GDAX websocket feed URL. 
   feed_url = "wss://ws-feed.gdax.com"	# Required
@@ -62,6 +62,7 @@ func (sl *GdaxWebsocket) SampleConfig() string {
   #  ## 	       directly. Use environment variables to store credentials.
   #  ##		       With systemd services this can be achieved using the
   #  ##  	       'EnvironmentFile' variable. See man systemd.service
+  #  ##		       Remember to restrict permissions on the file to 600.
   #  [ inputs.gdax_websocket.channels.credentials ]
   #    secret =   "$JOHN_GDAX_SECRET"
   #    key =      "$JOHN_GDAX_KEY"
@@ -69,38 +70,20 @@ func (sl *GdaxWebsocket) SampleConfig() string {
 `
 }
 
-func (sl *GdaxWebsocket) Gather(_ telegraf.Accumulator) error {
+func (gx *GdaxWebsocket) Gather(_ telegraf.Accumulator) error {
 	return nil
 }
 
-func (sl *GdaxWebsocket) SetParser(parser parsers.Parser) {
-	sl.Parser = parser
-}
-
-func (sl *GdaxWebsocket) Start(acc telegraf.Accumulator) error {
+func (gx *GdaxWebsocket) Start(acc telegraf.Accumulator) error {
+	gx.acc = acc
 	return nil
 }
 
-func (sl *GdaxWebsocket) Stop() {
+func (gx *GdaxWebsocket) Stop() {
 }
 
 func newGdaxWebsocket() *GdaxWebsocket {
-	parser, _ := parsers.NewInfluxParser()
-
-	return &GdaxWebsocket{
-		Parser: parser,
-	}
-}
-
-type unixCloser struct {
-	path   string
-	closer io.Closer
-}
-
-func (uc unixCloser) Close() error {
-	err := uc.closer.Close()
-	os.Remove(uc.path) // ignore error
-	return err
+	return &GdaxWebsocket{}
 }
 
 func init() {
