@@ -252,7 +252,7 @@ func TestWriteHTTPSNoClientAuth(t *testing.T) {
 	resp, err := noClientAuthClient.Post(createURL(listener, "https", "/"), "", bytes.NewBuffer([]byte(testMsg)))
 	require.NoError(t, err)
 	resp.Body.Close()
-	require.EqualValues(t, 204, resp.StatusCode)
+	require.EqualValues(t, 200, resp.StatusCode)
 }
 
 func TestWriteHTTPSWithClientAuth(t *testing.T) {
@@ -266,7 +266,7 @@ func TestWriteHTTPSWithClientAuth(t *testing.T) {
 	resp, err := getHTTPSClient().Post(createURL(listener, "https", "/"), "", bytes.NewBuffer([]byte(testMsg)))
 	require.NoError(t, err)
 	resp.Body.Close()
-	require.EqualValues(t, 204, resp.StatusCode)
+	require.EqualValues(t, 200, resp.StatusCode)
 }
 
 func TestWriteHTTP(t *testing.T) {
@@ -280,7 +280,7 @@ func TestWriteHTTP(t *testing.T) {
 	resp, err := http.Post(createURL(listener, "http", "/"), "", bytes.NewBuffer([]byte(testMsg)))
 	require.NoError(t, err)
 	resp.Body.Close()
-	require.EqualValues(t, 204, resp.StatusCode)
+	require.EqualValues(t, 200, resp.StatusCode)
 
 	acc.Wait(1)
 	acc.AssertContainsTaggedFields(t, "creekwood",
@@ -305,7 +305,7 @@ func TestWriteHTTPNoNewline(t *testing.T) {
 	resp, err := http.Post(createURL(listener, "http", "/"), "", bytes.NewBuffer([]byte(testMsgNoNewline)))
 	require.NoError(t, err)
 	resp.Body.Close()
-	require.EqualValues(t, 204, resp.StatusCode)
+	require.EqualValues(t, 200, resp.StatusCode)
 
 	acc.Wait(1)
 	acc.AssertContainsTaggedFields(t, "creekwood",
@@ -331,7 +331,7 @@ func TestWriteHTTPMaxLineSizeIncrease(t *testing.T) {
 	resp, err := http.Post(createURL(listener, "http", "/"), "", bytes.NewBuffer([]byte(hugeMetric)))
 	require.NoError(t, err)
 	resp.Body.Close()
-	require.EqualValues(t, 204, resp.StatusCode)
+	require.EqualValues(t, 200, resp.StatusCode)
 }
 
 func TestWriteHTTPVerySmallMaxBody(t *testing.T) {
@@ -389,7 +389,7 @@ func TestWriteHTTPGzippedData(t *testing.T) {
 //				resp, err := http.Post(createURL(listener, "http", "/"), "", bytes.NewBuffer([]byte(testMsgs)))
 //				require.NoError(t, err)
 //				resp.Body.Close()
-//				require.EqualValues(t, 204, resp.StatusCode)
+//				require.EqualValues(t, 200, resp.StatusCode)
 //			}
 //		}(&wg)
 //	}
@@ -440,7 +440,7 @@ func TestWriteHTTPEmpty(t *testing.T) {
 	resp, err := http.Post(createURL(listener, "http", "/"), "", bytes.NewBuffer([]byte(emptyMsg)))
 	require.NoError(t, err)
 	resp.Body.Close()
-	require.EqualValues(t, 204, resp.StatusCode)
+	require.EqualValues(t, 200, resp.StatusCode)
 }
 
 const hugeMetric = `
