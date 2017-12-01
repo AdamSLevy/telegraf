@@ -1,1 +1,105 @@
-package gdax_websocket
+package gdaxWebsocket
+
+import (
+	"testing"
+
+	"github.com/influxdata/telegraf"
+	//"github.com/influxdata/telegraf/testutil"
+
+	"github.com/stretchr/testify/assert"
+)
+
+func TestIsServiceInput(t *testing.T) {
+	assert.Implements(t, (*telegraf.ServiceInput)(nil), new(GdaxWebsocket),
+		"should implement telegraf.ServiceInput")
+}
+
+func TestValidate(t *testing.T) {
+	gx := &GdaxWebsocket{}
+	assert := assert.New(t)
+
+	gx.FeedURL = ""
+	gx.Channels = []*channelConfig{{Channel: "ticker", Pairs: []string{"ETH-USD"}}}
+	assert.Error(gx.validateConfig(), "empty FeedURL should be invalid")
+
+	gx.FeedURL = "wss://ws-feed.gdax.com"
+	gx.Channels = nil
+	assert.Error(gx.validateConfig(), "no Channels should fail")
+
+	gx.Channels = []*channelConfig{{}}
+	assert.Error(gx.validateConfig(), "empty channel in channels should be invalid")
+
+	gx.Channels[0].Channel = "ticker"
+	assert.Error(gx.validateConfig(), "empty pairs should be invalid")
+
+	gx.Channels[0].Channel = "invalid channel"
+	gx.Channels[0].Pairs = []string{"ETH-BTC"}
+	assert.Error(gx.validateConfig(), "invalid channel name should be invalid")
+
+	validTestChannels := []string{"ticker", "level2"}
+	for _, channel := range validTestChannels {
+		gx.Channels[0].Channel = channel
+		assert.NoError(gx.validateConfig(),
+			"channel '%s' should be valid", channel)
+
+		channelConfigCopy := *gx.Channels[0]
+		gx.Channels = append(gx.Channels, &channelConfigCopy)
+		assert.Errorf(gx.validateConfig(),
+			"multiple '%s' channels should be invalid",
+			channel)
+		gx.Channels = gx.Channels[:len(gx.Channels)-1]
+
+		gx.Channels[0].UserName = "John Smith"
+		assert.Errorf(gx.validateConfig(),
+			"non-empty UserName for channel '%s' should be invalid",
+			channel)
+		gx.Channels[0].UserName = ""
+
+		gx.Channels[0].Credentials = map[string]string{"test": "test"}
+		assert.Errorf(gx.validateConfig(),
+			"non-empty Credentials for channel '%s' should be invalid",
+			channel)
+		gx.Channels[0].Credentials = nil
+	}
+
+	gx.Channels[0].Channel = "user"
+	assert.Error(gx.validateConfig(),
+		"empty UserName in 'user' channel should be invalid")
+
+	gx.Channels[0].UserName = "John Smith"
+	assert.Error(gx.validateConfig(),
+		"empty Credentials in 'user' channel should be invalid")
+
+	gx.Channels[0].Credentials = map[string]string{"blah": "key"}
+	assert.Error(gx.validateConfig(),
+		"bad config key in Credentials in 'user' channel should be invalid")
+
+	keys := []string{"key", "secret", "password"}
+	gx.Channels[0].Credentials = make(map[string]string)
+	for _, key := range keys {
+		gx.Channels[0].Credentials[key] = key
+	}
+	for _, key := range keys {
+		delete(gx.Channels[0].Credentials, key)
+		assert.Errorf(gx.validateConfig(),
+			"missing '%s' in Credentials in 'user' channel should be invalid",
+			key)
+		gx.Channels[0].Credentials[key] = ""
+		assert.Errorf(gx.validateConfig(),
+			"empty '%s' in Credentials in 'user' channel should be invalid",
+			key)
+		gx.Channels[0].Credentials[key] = key
+	}
+
+	assert.NoError(gx.validateConfig(),
+		"'user' channel with UserName and Credentials should be valid")
+
+	channelConfigCopy := *gx.Channels[0]
+	gx.Channels = append(gx.Channels, &channelConfigCopy)
+	assert.Error(gx.validateConfig(),
+		"multiple 'user' channels with the same user_name should be invalid")
+	gx.Channels[1].UserName = "Jane"
+	assert.NoError(gx.validateConfig(),
+		"multiple 'user' channels with the same user_name should be invalid")
+	gx.Channels = gx.Channels[:len(gx.Channels)-1]
+}
