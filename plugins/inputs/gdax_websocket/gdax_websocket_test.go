@@ -41,6 +41,8 @@ func TestValidate(t *testing.T) {
 		gx.Channels[0].Channel = channel
 		assert.NoError(gx.validateConfig(),
 			"channel '%s' should be valid", channel)
+		assert.Equal(gx.numUsers, 0,
+			"numUsers should be 0 with no 'user' channel configs")
 
 		channelConfigCopy := *gx.Channels[0]
 		gx.Channels = append(gx.Channels, &channelConfigCopy)
@@ -93,13 +95,23 @@ func TestValidate(t *testing.T) {
 
 	assert.NoError(gx.validateConfig(),
 		"'user' channel with UserName and Credentials should be valid")
+	assert.Equal(gx.numUsers, 1,
+		"numUsers should be 1 with one valid 'user' channel config")
 
 	channelConfigCopy := *gx.Channels[0]
 	gx.Channels = append(gx.Channels, &channelConfigCopy)
 	assert.Error(gx.validateConfig(),
 		"multiple 'user' channels with the same user_name should be invalid")
+
 	gx.Channels[1].UserName = "Jane"
 	assert.NoError(gx.validateConfig(),
-		"multiple 'user' channels with the same user_name should be invalid")
+		"multiple 'user' channels with unique user_names should be valid")
+	assert.Equal(gx.numUsers, 2,
+		"numUsers should be 2 with two valid 'user' channel configs")
 	gx.Channels = gx.Channels[:len(gx.Channels)-1]
+}
+
+func TestStart(t *testing.T) {
+	//gx := &GdaxWebsocket{}
+	//assert := assert.New(t)
 }

@@ -8,7 +8,8 @@ import (
 
 	"github.com/influxdata/telegraf"
 	"github.com/influxdata/telegraf/plugins/inputs"
-	//ws "github.com/gorilla/websocket"
+
+	ws "github.com/gorilla/websocket"
 )
 
 // GdaxWebsocket implenets the telegraf.ServiceInput interface for collecting
@@ -16,6 +17,10 @@ import (
 type GdaxWebsocket struct {
 	FeedURL  string `toml:"feed_url"`
 	Channels []*channelConfig
+
+	numUsers int
+
+	wsConn *ws.Conn
 
 	acc telegraf.Accumulator
 }
@@ -26,6 +31,23 @@ type channelConfig struct {
 
 	UserName    string
 	Credentials map[string]string
+}
+
+type subscription struct {
+	Type     string                `json:"type"`
+	Channels []channelSubscription `json:"channels"`
+}
+
+type channelSubscription struct {
+	Name  string   `json:"name"`
+	Pairs []string `json:"product_ids"`
+}
+
+type signature struct {
+	Signature  string `json:"signature"`
+	Key        string `json:"key"`
+	Passphrase string `json:"passphrase"`
+	Timestamp  string `json:"timestamp"`
 }
 
 // Description prints a short description
@@ -78,6 +100,13 @@ func (gx *GdaxWebsocket) Start(acc telegraf.Accumulator) error {
 	if err := gx.validateConfig(); err != nil {
 		return err
 	}
+
+	var wsDialer ws.Dialer
+	wsConn, _, err := wsDialer.Dial(gx.FeedURL, nil)
+	if err != nil {
+		return err
+	}
+	gx.wsConn = wsConn
 
 	gx.acc = acc
 
@@ -189,7 +218,12 @@ func (gx *GdaxWebsocket) validateConfig() error {
 		}
 	}
 
+	gx.numUsers = len(users)
 	return nil
+}
+
+func (gx *GdaxWebsocket) subscribe() subscription {
+	return subscription{Type: "subscribe"}
 }
 
 func init() {
