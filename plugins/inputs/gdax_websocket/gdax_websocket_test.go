@@ -4,14 +4,24 @@ import (
 	"testing"
 
 	"github.com/influxdata/telegraf"
-	//"github.com/influxdata/telegraf/testutil"
+	"github.com/influxdata/telegraf/testutil"
 
 	"github.com/stretchr/testify/assert"
 )
 
-func TestIsServiceInput(t *testing.T) {
-	assert.Implements(t, (*telegraf.ServiceInput)(nil), new(GdaxWebsocket),
+func TestServiceInput(t *testing.T) {
+	gx := &GdaxWebsocket{}
+	acc := &testutil.Accumulator{}
+	assert := assert.New(t)
+
+	assert.Implements((*telegraf.ServiceInput)(nil), gx,
 		"should implement telegraf.ServiceInput")
+
+	assert.NotEmpty(gx.SampleConfig(), "sample config should not be empty")
+
+	assert.NotEmpty(gx.Description(), "description should not be empty")
+
+	assert.Nil(gx.Gather(acc), "Gather should return nil")
 }
 
 func TestValidate(t *testing.T) {
