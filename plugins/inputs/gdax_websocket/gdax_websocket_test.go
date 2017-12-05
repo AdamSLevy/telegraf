@@ -24,7 +24,7 @@ func TestServiceInput(t *testing.T) {
 	assert.Nil(gx.Gather(acc), "Gather should return nil")
 }
 
-func TestValidate(t *testing.T) {
+func TestValidateConfig(t *testing.T) {
 	gx := &GdaxWebsocket{}
 	assert := assert.New(t)
 
