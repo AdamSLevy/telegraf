@@ -24,7 +24,7 @@ func TestValidate(t *testing.T) {
 
 	gx.FeedURL = "wss://ws-feed.gdax.com"
 	gx.Channels = nil
-	assert.Error(gx.validateConfig(), "no Channels should fail")
+	assert.Error(gx.validateConfig(), "empty channels should be invalid")
 
 	gx.Channels = []*channelConfig{{}}
 	assert.Error(gx.validateConfig(), "empty channel in channels should be invalid")
