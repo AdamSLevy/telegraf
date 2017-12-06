@@ -67,11 +67,23 @@ func TestValidateConfig(t *testing.T) {
 			channel)
 		gx.Channels[0].UserName = ""
 
-		gx.Channels[0].Credentials = map[string]string{"test": "test"}
+		gx.Channels[0].Key = "api key"
 		assert.Errorf(gx.validateConfig(),
-			"non-empty Credentials for channel '%s' should be invalid",
+			"non-empty key for channel '%s' should be invalid",
 			channel)
-		gx.Channels[0].Credentials = nil
+		gx.Channels[0].Key = ""
+
+		gx.Channels[0].Secret = "api secret"
+		assert.Errorf(gx.validateConfig(),
+			"non-empty secret for channel '%s' should be invalid",
+			channel)
+		gx.Channels[0].Secret = ""
+
+		gx.Channels[0].Passphrase = "api passphrase"
+		assert.Errorf(gx.validateConfig(),
+			"non-empty passphrase for channel '%s' should be invalid",
+			channel)
+		gx.Channels[0].Passphrase = ""
 	}
 
 	gx.Channels[0].Channel = "user"
@@ -79,43 +91,42 @@ func TestValidateConfig(t *testing.T) {
 		"empty UserName in 'user' channel should be invalid")
 
 	gx.Channels[0].UserName = "John Smith"
+	gx.Channels[0].Key = ""
+	gx.Channels[0].Secret = "secret"
+	gx.Channels[0].Passphrase = "passphrase"
 	assert.Error(gx.validateConfig(),
-		"empty Credentials in 'user' channel should be invalid")
+		"empty key in 'user' channel should be invalid")
 
-	gx.Channels[0].Credentials = map[string]string{"blah": "key"}
+	gx.Channels[0].Key = "key"
+	gx.Channels[0].Secret = ""
 	assert.Error(gx.validateConfig(),
-		"bad config key in Credentials in 'user' channel should be invalid")
+		"empty secret in 'user' channel should be invalid")
 
-	keys := []string{"key", "secret", "password"}
-	gx.Channels[0].Credentials = make(map[string]string)
-	for _, key := range keys {
-		gx.Channels[0].Credentials[key] = key
-	}
-	for _, key := range keys {
-		delete(gx.Channels[0].Credentials, key)
-		assert.Errorf(gx.validateConfig(),
-			"missing '%s' in Credentials in 'user' channel should be invalid",
-			key)
-		gx.Channels[0].Credentials[key] = ""
-		assert.Errorf(gx.validateConfig(),
-			"empty '%s' in Credentials in 'user' channel should be invalid",
-			key)
-		gx.Channels[0].Credentials[key] = key
-	}
+	gx.Channels[0].Secret = "secret"
+	gx.Channels[0].Passphrase = ""
+	assert.Error(gx.validateConfig(),
+		"empty passphrase in 'user' channel should be invalid")
+	gx.Channels[0].Passphrase = "passphrase"
 
 	assert.NoError(gx.validateConfig(),
-		"'user' channel with UserName and Credentials should be valid")
+		"'user' channel with UserName and credentials should be valid")
 	assert.Equal(gx.numUsers, 1,
 		"numUsers should be 1 with one valid 'user' channel config")
 
 	channelConfigCopy := *gx.Channels[0]
+	channelConfigCopy.Key = "key1"
 	gx.Channels = append(gx.Channels, &channelConfigCopy)
 	assert.Error(gx.validateConfig(),
 		"multiple 'user' channels with the same user_name should be invalid")
 
 	gx.Channels[1].UserName = "Jane"
+	channelConfigCopy.Key = "key"
+	assert.Error(gx.validateConfig(),
+		"multiple 'user' channels with the same key should be invalid")
+
+	channelConfigCopy.Key = "key1"
 	assert.NoError(gx.validateConfig(),
-		"multiple 'user' channels with unique user_names should be valid")
+		"multiple 'user' channels with unique user_names and keys should be valid")
 	assert.Equal(gx.numUsers, 2,
 		"numUsers should be 2 with two valid 'user' channel configs")
 	gx.Channels = gx.Channels[:len(gx.Channels)-1]

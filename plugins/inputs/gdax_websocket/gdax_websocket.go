@@ -2,14 +2,16 @@ package gdaxWebsocket
 
 import (
 	"fmt"
-	//"log"
+	"log"
+	"strconv"
 	"strings"
-	//"net/url"
+	"time"
 
 	"github.com/influxdata/telegraf"
 	"github.com/influxdata/telegraf/plugins/inputs"
 
 	ws "github.com/gorilla/websocket"
+	gdax "github.com/preichenberger/go-gdax"
 )
 
 // GdaxWebsocket implenets the telegraf.ServiceInput interface for collecting
@@ -20,7 +22,7 @@ type GdaxWebsocket struct {
 
 	numUsers int
 
-	wsConn *ws.Conn
+	wsConns []*ws.Conn
 
 	acc telegraf.Accumulator
 }
@@ -29,25 +31,25 @@ type channelConfig struct {
 	Channel string
 	Pairs   []string
 
-	UserName    string
-	Credentials map[string]string
+	UserName   string
+	Key        string
+	Secret     string
+	Passphrase string
 }
 
 type subscription struct {
 	Type     string                `json:"type"`
 	Channels []channelSubscription `json:"channels"`
+
+	Key        string `json:"key,omitempty"`
+	Signature  string `json:"signature,omitempty"`
+	Passphrase string `json:"passphrase,omitempty"`
+	Timestamp  string `json:"timestamp,omitempty"`
 }
 
 type channelSubscription struct {
 	Name  string   `json:"name"`
 	Pairs []string `json:"product_ids"`
-}
-
-type signature struct {
-	Signature  string `json:"signature"`
-	Key        string `json:"key"`
-	Passphrase string `json:"passphrase"`
-	Timestamp  string `json:"timestamp"`
 }
 
 // Description prints a short description
@@ -82,10 +84,9 @@ func (gx *GdaxWebsocket) SampleConfig() string {
   #  ##		       With systemd services this can be achieved using the
   #  ##  	       'EnvironmentFile' variable. See man systemd.service
   #  ##		       Remember to restrict permissions on the file to 600.
-  #  [ inputs.gdax_websocket.channels.credentials ] # Required for "user" channel
-  #    secret =   "$JOHN_GDAX_SECRET"
-  #    key =      "$JOHN_GDAX_KEY"
-  #    password = "$JOHN_GDAX_PASSWORD"
+  #  key =      "$JOHN_GDAX_KEY"
+  #  secret =   "$JOHN_GDAX_SECRET"
+  #  password = "$JOHN_GDAX_PASSWORD"
 `
 }
 
@@ -101,20 +102,45 @@ func (gx *GdaxWebsocket) Start(acc telegraf.Accumulator) error {
 		return err
 	}
 
-	var wsDialer ws.Dialer
-	wsConn, _, err := wsDialer.Dial(gx.FeedURL, nil)
+	subs, err := gx.generateSubscriptions()
 	if err != nil {
 		return err
 	}
-	gx.wsConn = wsConn
 
 	gx.acc = acc
+	for _, sub := range subs {
+		wsDialer := ws.Dialer{EnableCompression: true}
+		wsConn, _, err := wsDialer.Dial(gx.FeedURL, nil)
+		if err != nil {
+			return err
+		}
+		gx.wsConns = append(gx.wsConns, wsConn)
+		if err := wsConn.WriteJSON(sub); err != nil {
+			gx.Stop()
+			return err
+		}
+		go gx.listen(wsConn)
+	}
 
 	return nil
 }
 
+func (gx *GdaxWebsocket) listen(wsConn *ws.Conn) {
+	message := gdax.Message{}
+	for true {
+		if err := wsConn.ReadJSON(&message); err != nil {
+			log.Println(err.Error())
+			break
+		}
+		fmt.Println(message)
+	}
+}
+
 // Stop shuts down the running go routing and stops the service
 func (gx *GdaxWebsocket) Stop() {
+	for _, wsConn := range gx.wsConns {
+		wsConn.Close()
+	}
 }
 
 func (gx *GdaxWebsocket) validateConfig() error {
@@ -127,6 +153,7 @@ func (gx *GdaxWebsocket) validateConfig() error {
 	}
 
 	users := make(map[string]interface{})
+	userKeys := make(map[string]interface{})
 	var ticker, level2 bool
 	for _, c := range gx.Channels {
 		if len(c.Channel) == 0 {
@@ -164,55 +191,35 @@ func (gx *GdaxWebsocket) validateConfig() error {
 					"cannot specify user_name for '%s' channel",
 					c.Channel)
 			}
-			if len(c.Credentials) > 0 {
+			if len(c.Key) > 0 || len(c.Secret) > 0 || len(c.Passphrase) > 0 {
 				return fmt.Errorf(
-					"cannot specify credentials for '%s' channel",
+					"cannot specify API credentials for '%s' channel",
 					c.Channel)
 			}
 		case "user":
 			if len(c.UserName) == 0 {
 				return fmt.Errorf("no user_name for 'user' channel")
 			}
+			if len(c.Key) == 0 {
+				return fmt.Errorf("no key specified for user '%s'",
+					c.UserName)
+			}
+			if len(c.Secret) == 0 {
+				return fmt.Errorf("no secret specified for user '%s'",
+					c.UserName)
+			}
+			if len(c.Passphrase) == 0 {
+				return fmt.Errorf("no passphrase specified for user '%s'",
+					c.UserName)
+			}
 			if _, ok := users[c.UserName]; ok {
 				return fmt.Errorf("user_name should be unique")
 			}
 			users[c.UserName] = true
-			if len(c.Credentials) == 0 {
-				return fmt.Errorf("no credentials for user_name '%s'",
-					c.UserName)
+			if _, ok := userKeys[c.Key]; ok {
+				return fmt.Errorf("key should be unique")
 			}
-			var key, secret, password bool
-			for k, v := range c.Credentials {
-				switch k {
-				case "key":
-					if len(v) > 0 {
-						key = true
-					}
-				case "secret":
-					if len(v) > 0 {
-						secret = true
-					}
-				case "password":
-					if len(v) > 0 {
-						password = true
-					}
-				default:
-					return fmt.Errorf(
-						"invalid credentials option: %s", k)
-				}
-			}
-			if !key {
-				return fmt.Errorf("no key specified for user '%s'",
-					c.UserName)
-			}
-			if !secret {
-				return fmt.Errorf("no secret specified for user '%s'",
-					c.UserName)
-			}
-			if !password {
-				return fmt.Errorf("no password specified for user '%s'",
-					c.UserName)
-			}
+			userKeys[c.Key] = true
 		default:
 			return fmt.Errorf("invalid channel: '%s'", c.Channel)
 		}
@@ -222,8 +229,35 @@ func (gx *GdaxWebsocket) validateConfig() error {
 	return nil
 }
 
-func (gx *GdaxWebsocket) subscribe() subscription {
-	return subscription{Type: "subscribe"}
+func (gx *GdaxWebsocket) generateSubscriptions() ([]subscription, error) {
+	numSubs := 1
+	if gx.numUsers > 1 {
+		numSubs += gx.numUsers - 1
+	}
+	subs := make([]subscription, numSubs)
+	subID := 0
+	for _, channel := range gx.Channels {
+		subs[subID].Channels = append(subs[subID].Channels, channelSubscription{
+			Name:  channel.Channel,
+			Pairs: channel.Pairs,
+		})
+		if channel.Channel == "user" {
+			timestamp := strconv.FormatInt(time.Now().Unix(), 10)
+			auth, err := gdax.NewClient(
+				channel.Secret, channel.Key, channel.Passphrase).
+				Headers("GET", "/users/self/verify", timestamp, "")
+			if err != nil {
+				return nil, err
+			}
+			subs[subID].Key = channel.Key
+			subs[subID].Passphrase = channel.Passphrase
+			subs[subID].Timestamp = timestamp
+			subs[subID].Signature = auth["CB-ACCESS-SIGN"]
+			subID++
+		}
+	}
+
+	return subs, nil
 }
 
 func init() {
