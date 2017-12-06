@@ -243,11 +243,20 @@ func (gx *GdaxWebsocket) generateSubscribeRequests() []subscribeRequest {
 	}
 	subs := make([]subscribeRequest, numSubs)
 	subID := 0
+	hasUser := false
 	for _, channel := range gx.Channels {
 		subs[subID].Type = "subscribe"
 		subs[subID].Channels = append(subs[subID].Channels, channel)
 
 		if channel.Channel == "user" {
+			if hasUser {
+				// Only one authenticated user per websocket
+				// connection. Move on to next subscription.
+				subID++
+				hasUser = false
+			} else {
+				hasUser = true
+			}
 			// Add credentials to subscribeRequest
 			subs[subID].Key = channel.Key
 			subs[subID].Passphrase = channel.Passphrase
@@ -255,9 +264,6 @@ func (gx *GdaxWebsocket) generateSubscribeRequests() []subscribeRequest {
 				channel.Passphrase)
 			subs[subID].Timestamp = timestamp
 			subs[subID].Signature = signature
-			// Only one authenticated user per websocket
-			// connection. Move on to next subscription.
-			subID++
 		}
 	}
 

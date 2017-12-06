@@ -159,10 +159,37 @@ func TestValidateConfig(t *testing.T) {
 
 func TestGenerateSubscribeRequests(t *testing.T) {
 	gx := validTestGdaxWebsocket
-	require.NoError(t, gx.validateConfig(), "valid config")
+	channels := append([]channelConfig{tickerChannelConfig, level2ChannelConfig},
+		userChannelConfigs...)
+	gx.Channels = append([]channelConfig(nil), channels...)
+	require := require.New(t)
+	require.NoError(gx.validateConfig(), "two users")
+	testSubscribeRequests(t, gx.generateSubscribeRequests(), 2)
+
+	// Put one user channelConfig first
+	gx.Channels = append([]channelConfig(nil), channels...)
+	gx.Channels = append(gx.Channels[len(gx.Channels)-1:len(gx.Channels)],
+		gx.Channels[:len(gx.Channels)-1]...)
+	require.NoError(gx.validateConfig(), "a user first")
+	testSubscribeRequests(t, gx.generateSubscribeRequests(), 2)
+
+	// Put both user channelConfigs first
+	gx.Channels = append([]channelConfig(nil), channels...)
+	gx.Channels = append(gx.Channels[len(gx.Channels)-2:len(gx.Channels)],
+		gx.Channels[:len(gx.Channels)-2]...)
+	require.NoError(gx.validateConfig(), "both users first")
+	testSubscribeRequests(t, gx.generateSubscribeRequests(), 2)
+
+	gx.Channels = append([]channelConfig(nil), channels...)
+	gx.Channels = gx.Channels[:len(gx.Channels)-1]
+	require.NoError(gx.validateConfig(), "one user")
+	testSubscribeRequests(t, gx.generateSubscribeRequests(), 1)
+}
+
+func testSubscribeRequests(t *testing.T, subs []subscribeRequest, numExpected int) {
 	assert := assert.New(t)
-	subs := gx.generateSubscribeRequests()
-	assert.Len(subs, 2, "config with 2 users should return 2 subscribeRequests")
+	assert.Len(subs, numExpected,
+		"config with %v users", numExpected)
 	for _, sub := range subs {
 		assert.NotEmpty(sub.Key, "config with a user should have a non-empty Key")
 		assert.NotEmpty(sub.Signature,
@@ -173,17 +200,6 @@ func TestGenerateSubscribeRequests(t *testing.T) {
 			"config with a user should have a non-empty Timestamp")
 	}
 
-	gx.Channels = gx.Channels[:len(gx.Channels)-1]
-	require.NoError(t, gx.validateConfig(), "valid config")
-	subs = gx.generateSubscribeRequests()
-	assert.Len(subs, 1, "config with 1 user should return 1 subscribeRequest")
-	assert.NotEmpty(subs[0].Key, "config with a user should have a non-empty Key")
-	assert.NotEmpty(subs[0].Signature,
-		"config with a user should have a non-empty Signature")
-	assert.NotEmpty(subs[0].Passphrase,
-		"config with a user should have a non-empty Passphrase")
-	assert.NotEmpty(subs[0].Timestamp,
-		"config with a user should have a non-empty Timestamp")
 }
 
 //func TestStart(t *testing.T) {
