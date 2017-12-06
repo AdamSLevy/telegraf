@@ -237,6 +237,7 @@ func (gx *GdaxWebsocket) generateSubscriptions() ([]subscription, error) {
 	subs := make([]subscription, numSubs)
 	subID := 0
 	for _, channel := range gx.Channels {
+		subs[subID].Type = "subscribe"
 		subs[subID].Channels = append(subs[subID].Channels, channelSubscription{
 			Name:  channel.Channel,
 			Pairs: channel.Pairs,
