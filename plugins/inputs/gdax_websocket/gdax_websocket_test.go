@@ -159,29 +159,25 @@ func TestValidateConfig(t *testing.T) {
 
 func TestGenerateSubscribeRequests(t *testing.T) {
 	gx := validTestGdaxWebsocket
-	channels := append([]channelConfig{tickerChannelConfig, level2ChannelConfig},
+	gx.Channels = append([]channelConfig{tickerChannelConfig, level2ChannelConfig},
 		userChannelConfigs...)
-	gx.Channels = append([]channelConfig(nil), channels...)
 	require := require.New(t)
 	require.NoError(gx.validateConfig(), "two users")
 	testSubscribeRequests(t, gx.generateSubscribeRequests(), 2)
 
 	// Put one user channelConfig first
-	gx.Channels = append([]channelConfig(nil), channels...)
 	gx.Channels = append(gx.Channels[len(gx.Channels)-1:len(gx.Channels)],
 		gx.Channels[:len(gx.Channels)-1]...)
 	require.NoError(gx.validateConfig(), "a user first")
 	testSubscribeRequests(t, gx.generateSubscribeRequests(), 2)
 
 	// Put both user channelConfigs first
-	gx.Channels = append([]channelConfig(nil), channels...)
-	gx.Channels = append(gx.Channels[len(gx.Channels)-2:len(gx.Channels)],
-		gx.Channels[:len(gx.Channels)-2]...)
+	gx.Channels = append(gx.Channels[len(gx.Channels)-1:len(gx.Channels)],
+		gx.Channels[:len(gx.Channels)-1]...)
 	require.NoError(gx.validateConfig(), "both users first")
 	testSubscribeRequests(t, gx.generateSubscribeRequests(), 2)
 
-	gx.Channels = append([]channelConfig(nil), channels...)
-	gx.Channels = gx.Channels[:len(gx.Channels)-1]
+	gx.Channels = gx.Channels[1:len(gx.Channels)]
 	require.NoError(gx.validateConfig(), "one user")
 	testSubscribeRequests(t, gx.generateSubscribeRequests(), 1)
 }
