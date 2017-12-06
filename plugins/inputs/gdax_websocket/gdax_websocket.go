@@ -14,8 +14,8 @@ import (
 	gdax "github.com/preichenberger/go-gdax"
 )
 
-// GdaxWebsocket implenets the telegraf.ServiceInput interface for collecting
-// metrics from GDAX's webwocket feed.
+// GdaxWebsocket implements the telegraf.ServiceInput interface for collecting
+// metrics from GDAX's websocket feed.
 type GdaxWebsocket struct {
 	FeedURL  string `toml:"feed_url"`
 	Channels []*channelConfig
