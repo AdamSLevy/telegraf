@@ -1,6 +1,7 @@
 package gdaxWebsocket
 
 import (
+	"encoding/base64"
 	"fmt"
 	"log"
 	"strconv"
@@ -18,9 +19,9 @@ import (
 // metrics from GDAX's websocket feed.
 type GdaxWebsocket struct {
 	FeedURL  string `toml:"feed_url"`
-	Channels []*channelConfig
+	Channels []channelConfig
 
-	numUsers int
+	userNamesByKey map[string]string
 
 	wsConns []*ws.Conn
 
@@ -28,28 +29,23 @@ type GdaxWebsocket struct {
 }
 
 type channelConfig struct {
-	Channel string
-	Pairs   []string
+	Channel string   `json:"name"`
+	Pairs   []string `json:"product_ids"`
 
-	UserName   string
-	Key        string
-	Secret     string
-	Passphrase string
+	UserName   string `json:"-"`
+	Key        string `json:"-"`
+	Secret     string `json:"-"`
+	Passphrase string `json:"-"`
 }
 
-type subscription struct {
-	Type     string                `json:"type"`
-	Channels []channelSubscription `json:"channels"`
+type subscribeRequest struct {
+	Type     string          `json:"type"`
+	Channels []channelConfig `json:"channels"`
 
 	Key        string `json:"key,omitempty"`
 	Signature  string `json:"signature,omitempty"`
 	Passphrase string `json:"passphrase,omitempty"`
 	Timestamp  string `json:"timestamp,omitempty"`
-}
-
-type channelSubscription struct {
-	Name  string   `json:"name"`
-	Pairs []string `json:"product_ids"`
 }
 
 // Description prints a short description
@@ -102,12 +98,10 @@ func (gx *GdaxWebsocket) Start(acc telegraf.Accumulator) error {
 		return err
 	}
 
-	subs, err := gx.generateSubscriptions()
-	if err != nil {
-		return err
-	}
-
 	gx.acc = acc
+
+	subs := gx.generateSubscribeRequests()
+
 	for _, sub := range subs {
 		wsDialer := ws.Dialer{EnableCompression: true}
 		wsConn, _, err := wsDialer.Dial(gx.FeedURL, nil)
@@ -153,7 +147,7 @@ func (gx *GdaxWebsocket) validateConfig() error {
 	}
 
 	users := make(map[string]interface{})
-	userKeys := make(map[string]interface{})
+	userNamesByKey := make(map[string]string)
 	var ticker, level2 bool
 	for _, c := range gx.Channels {
 		if len(c.Channel) == 0 {
@@ -204,9 +198,16 @@ func (gx *GdaxWebsocket) validateConfig() error {
 				return fmt.Errorf("no key specified for user '%s'",
 					c.UserName)
 			}
+
+			if _, e := base64.StdEncoding.DecodeString(c.Key); e != nil {
+				return fmt.Errorf("non-base64 key")
+			}
 			if len(c.Secret) == 0 {
 				return fmt.Errorf("no secret specified for user '%s'",
 					c.UserName)
+			}
+			if _, e := base64.StdEncoding.DecodeString(c.Secret); e != nil {
+				return fmt.Errorf("non-base64 secret")
 			}
 			if len(c.Passphrase) == 0 {
 				return fmt.Errorf("no passphrase specified for user '%s'",
@@ -216,49 +217,62 @@ func (gx *GdaxWebsocket) validateConfig() error {
 				return fmt.Errorf("user_name should be unique")
 			}
 			users[c.UserName] = true
-			if _, ok := userKeys[c.Key]; ok {
+			if _, ok := userNamesByKey[c.Key]; ok {
 				return fmt.Errorf("key should be unique")
 			}
-			userKeys[c.Key] = true
+			userNamesByKey[c.Key] = c.UserName
 		default:
 			return fmt.Errorf("invalid channel: '%s'", c.Channel)
 		}
 	}
 
-	gx.numUsers = len(users)
+	gx.userNamesByKey = userNamesByKey
 	return nil
 }
 
-func (gx *GdaxWebsocket) generateSubscriptions() ([]subscription, error) {
+// generateSubscribeRequests generates a slice of subscribeRequest objects from
+// the GdaxWebsockets channelConfigs. Separate websocket connections, and thus,
+// separate subscribeRequests are required for each user channel. However, the
+// ticker and level2 channels can be on the same websocket connection together
+// and with a user channel.
+func (gx *GdaxWebsocket) generateSubscribeRequests() []subscribeRequest {
 	numSubs := 1
-	if gx.numUsers > 1 {
-		numSubs += gx.numUsers - 1
+	numUsers := len(gx.userNamesByKey)
+	if numUsers > 1 {
+		numSubs += numUsers - 1
 	}
-	subs := make([]subscription, numSubs)
+	subs := make([]subscribeRequest, numSubs)
 	subID := 0
 	for _, channel := range gx.Channels {
 		subs[subID].Type = "subscribe"
-		subs[subID].Channels = append(subs[subID].Channels, channelSubscription{
-			Name:  channel.Channel,
-			Pairs: channel.Pairs,
-		})
+		subs[subID].Channels = append(subs[subID].Channels, channel)
+
 		if channel.Channel == "user" {
-			timestamp := strconv.FormatInt(time.Now().Unix(), 10)
-			auth, err := gdax.NewClient(
-				channel.Secret, channel.Key, channel.Passphrase).
-				Headers("GET", "/users/self/verify", timestamp, "")
-			if err != nil {
-				return nil, err
-			}
+			// Add credentials to subscribeRequest
 			subs[subID].Key = channel.Key
 			subs[subID].Passphrase = channel.Passphrase
+			timestamp, signature := getSignature(channel.Secret, channel.Key,
+				channel.Passphrase)
 			subs[subID].Timestamp = timestamp
-			subs[subID].Signature = auth["CB-ACCESS-SIGN"]
+			subs[subID].Signature = signature
+			// Only one authenticated user per websocket
+			// connection. Move on to next subscription.
 			subID++
 		}
 	}
 
-	return subs, nil
+	return subs
+}
+
+// getSignature returns the timestamp and signature for a websocket connection
+// given the user's secret, key, and passphrase.
+func getSignature(secret, key, passphrase string) (timestamp, signature string) {
+	timestamp = strconv.FormatInt(time.Now().Unix(), 10)
+	auth, _ := gdax.NewClient(secret, key, passphrase).
+		Headers("GET", "/users/self/verify", timestamp, "")
+	signature = auth["CB-ACCESS-SIGN"]
+	return
+
 }
 
 func init() {
