@@ -19,6 +19,7 @@ import (
 // metrics from GDAX's websocket feed.
 type GdaxWebsocket struct {
 	FeedURL  string `toml:"feed_url"`
+	Pairs    []string
 	Channels []channelConfig
 
 	userNamesByKey map[string]string
@@ -30,7 +31,7 @@ type GdaxWebsocket struct {
 
 type channelConfig struct {
 	Channel string   `json:"name"`
-	Pairs   []string `json:"product_ids"`
+	Pairs   []string `json:"product_ids,omitempty"`
 
 	UserName   string `json:"-"`
 	Key        string `json:"-"`
@@ -40,6 +41,7 @@ type channelConfig struct {
 
 type subscribeRequest struct {
 	Type     string          `json:"type"`
+	Pairs    []string        `json:"product_ids,omitempty"`
 	Channels []channelConfig `json:"channels"`
 
 	Key        string `json:"key,omitempty"`
@@ -58,20 +60,21 @@ func (gx *GdaxWebsocket) SampleConfig() string {
 	return `
   ## GDAX websocket feed URL. 
   feed_url = "wss://ws-feed.gdax.com"	# Required
+  pairs = [ "ETH-USD", "BTC-USD" ]	# These pairs will apply globally to all channels
 
-  ## Channels to subscribe to. 
+  ## Channels to subscribe to. Only ticker, level2, and user are supported.
   ## See https://docs.gdax.com/#overview for channel details.
   [[ inputs.gdax_websocket.channels ]]
-    channel = "ticker"  	    # Required
-    pairs = [ "ETH-USD", "BTC-USD" ] # At least one GDAX product pair is required
+    channel = "ticker"		# Required
+    ## Additional channel specific pairs.
+    pairs = [ "ETH-USD", "ETH-BTC" ] 	# Duplicate pairs are OK
 
   #[[ inputs.gdax_websocket.channels ]]
   #  channel = "level2"
-  #  pairs = [ "ETH-USD" ]
+  #  ## Channel specific pairs can be omitted only if 'pairs' was define globally
 
   #[[ inputs.gdax_websocket.channels ]]
   #  channel = "user"
-  #  pairs = [ "ETH-USD" ]
   #  user_name = "John" 		# Required for "user" channel
   #  ## User Credentials Required for "user" channel
   #  ## Adding user config subscribes to additional "user" channels.
@@ -146,22 +149,42 @@ func (gx *GdaxWebsocket) validateConfig() error {
 		return fmt.Errorf("no channels specified")
 	}
 
-	users := make(map[string]interface{})
+	globalPairs := make(map[string]bool)
+	var pairs []string
+	for _, pair := range gx.Pairs {
+		pair = strings.ToUpper(pair)
+		if _, ok := globalPairs[pair]; !ok {
+			globalPairs[pair] = true
+			pairs = append(pairs, pair)
+		}
+	}
+	gx.Pairs = pairs
+
+	users := make(map[string]bool)
 	userNamesByKey := make(map[string]string)
 	var ticker, level2 bool
-	for _, c := range gx.Channels {
+	for i, c := range gx.Channels {
 		if len(c.Channel) == 0 {
 			return fmt.Errorf("not specified: channel")
 		}
 
-		if len(c.Pairs) == 0 {
+		if len(gx.Pairs)+len(c.Pairs) == 0 {
 			return fmt.Errorf("no pairs specified for '%s' channel",
 				c.Channel)
 		}
 
-		for i, pair := range c.Pairs {
-			c.Pairs[i] = strings.ToUpper(pair)
+		channelPairs := make(map[string]bool)
+		pairs = nil
+		for _, pair := range c.Pairs {
+			pair = strings.ToUpper(pair)
+			if _, ok := globalPairs[pair]; !ok {
+				if _, ok := channelPairs[pair]; !ok {
+					channelPairs[pair] = true
+					pairs = append(pairs, pair)
+				}
+			}
 		}
+		gx.Channels[i].Pairs = pairs
 
 		var fall bool
 		switch c.Channel {
@@ -198,7 +221,6 @@ func (gx *GdaxWebsocket) validateConfig() error {
 				return fmt.Errorf("no key specified for user '%s'",
 					c.UserName)
 			}
-
 			if _, e := base64.StdEncoding.DecodeString(c.Key); e != nil {
 				return fmt.Errorf("non-base64 key")
 			}
@@ -265,6 +287,10 @@ func (gx *GdaxWebsocket) generateSubscribeRequests() []subscribeRequest {
 			subs[subID].Timestamp = timestamp
 			subs[subID].Signature = signature
 		}
+	}
+
+	for i, _ := range subs {
+		subs[i].Pairs = gx.Pairs
 	}
 
 	return subs

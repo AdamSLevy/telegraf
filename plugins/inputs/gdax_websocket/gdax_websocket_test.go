@@ -26,7 +26,7 @@ var userChannelConfigs = []channelConfig{
 		Pairs:      []string{"BTC-USD", "ETH-USD"},
 		UserName:   "John Smith",
 		Key:        "a531631f192bf4778a19fbfbfae237a5",
-		Secret:     "a531631f192bf4778a19fbfbfae237a5",
+		Secret:     "a4446242132b34778a19fbfbfae237a5",
 		Passphrase: "passphrase",
 	},
 	{
@@ -53,11 +53,11 @@ func TestServiceInput(t *testing.T) {
 	assert := assert.New(t)
 
 	assert.Implements((*telegraf.ServiceInput)(nil), gx,
-		"should implement telegraf.ServiceInput")
+		"implement telegraf.ServiceInput")
 
-	assert.NotEmpty(gx.SampleConfig(), "sample config should not be empty")
+	assert.NotEmpty(gx.SampleConfig(), "Sample Config")
 
-	assert.NotEmpty(gx.Description(), "description should not be empty")
+	assert.NotEmpty(gx.Description(), "Description")
 
 	assert.Nil(gx.Gather(acc), "Gather should return nil")
 }
@@ -80,6 +80,15 @@ func TestValidateConfig(t *testing.T) {
 	gx.Channels = append([]channelConfig(nil), validTestGdaxWebsocket.Channels...)
 	gx.Channels[0].Pairs = nil
 	assert.Error(gx.validateConfig(), "empty Pairs")
+
+	gx.Pairs = []string{"eth-usd", "BTC-ETH", "ETH-USD"}
+	gx.Channels[1].Pairs = []string{"btc-usd", "btc-usd", "BTC-ETH", "ETH-USD"}
+	assert.NoError(gx.validateConfig(), "global Pairs, empty channel Pairs")
+	assert.Len(gx.Pairs, 2, "remove duplicate global pair")
+	assert.Equal(gx.Pairs[0], "ETH-USD", "ToUpper on global pairs")
+	assert.Len(gx.Channels[0].Pairs, 0, "no channel specific pairs")
+	assert.Len(gx.Channels[1].Pairs, 1, "remove duplicate channel pairs")
+	assert.Equal(gx.Channels[1].Pairs[0], "BTC-USD", "ToUpper on channel pairs")
 
 	gx.Channels = append([]channelConfig(nil), validTestGdaxWebsocket.Channels...)
 	gx.Channels[0].Channel = "invalid"
