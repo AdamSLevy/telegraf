@@ -97,6 +97,10 @@ func (gx *GdaxWebsocket) Gather(_ telegraf.Accumulator) error {
 // Start validates the config, opens the websocket, subscribes to feeds, and
 // then launches a go routine to process the data stream.
 func (gx *GdaxWebsocket) Start(acc telegraf.Accumulator) error {
+	if acc == nil {
+		return fmt.Errorf("Accumulator is nil")
+	}
+
 	if err := gx.validateConfig(); err != nil {
 		return err
 	}
