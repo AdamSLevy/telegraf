@@ -210,7 +210,6 @@ func testSubscribeRequests(t *testing.T, subs []subscribeRequest, numExpected in
 func TestStart(t *testing.T) {
 	gx := &GdaxWebsocket{}
 	assert := assert.New(t)
-	assert.Error(gx.Start(nil), "nil Accumulator")
 	acc := &testutil.Accumulator{}
 	assert.Error(gx.Start(acc), "invalid config")
 }
