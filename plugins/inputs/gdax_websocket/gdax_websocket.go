@@ -4,8 +4,10 @@ import (
 	"encoding/base64"
 	"fmt"
 	"log"
+	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/influxdata/telegraf"
@@ -24,7 +26,9 @@ type GdaxWebsocket struct {
 
 	userNamesByKey map[string]string
 
-	wsConns []*ws.Conn
+	wg    sync.WaitGroup
+	conns []conn
+	dialer
 
 	acc telegraf.Accumulator
 }
@@ -50,16 +54,20 @@ type subscribeRequest struct {
 	Timestamp  string `json:"timestamp,omitempty"`
 }
 
+type subscribeResponse struct {
+	subscribeRequest
+}
+
 // Description prints a short description
 func (gx *GdaxWebsocket) Description() string {
-	return "Subscribes to channels on the GDAX websocket"
+	return "Subscribes to channels on GDAX's websocket feed"
 }
 
 // SampleConfig prints an example config section
 func (gx *GdaxWebsocket) SampleConfig() string {
 	return `
   ## GDAX websocket feed URL. 
-  feed_url = "wss://ws-feed.gdax.com"	# Required
+  # feed_url = "wss://ws-feed.gdax.com"	# Default
   pairs = [ "ETH-USD", "BTC-USD" ]	# These pairs will apply globally to all channels
 
   ## Channels to subscribe to. Only ticker, level2, and user are supported.
@@ -67,7 +75,7 @@ func (gx *GdaxWebsocket) SampleConfig() string {
   [[ inputs.gdax_websocket.channels ]]
     channel = "ticker"		# Required
     ## Additional channel specific pairs.
-    pairs = [ "ETH-USD", "ETH-BTC" ] 	# Duplicate pairs are OK
+    pairs = [ "ETH-USD", "ETH-BTC" ] 	# Redundant pairs are OK
 
   #[[ inputs.gdax_websocket.channels ]]
   #  channel = "level2"
@@ -76,6 +84,8 @@ func (gx *GdaxWebsocket) SampleConfig() string {
   #[[ inputs.gdax_websocket.channels ]]
   #  channel = "user"
   #  user_name = "John" 		# Required for "user" channel
+  #					## creates tag user="John"
+  #  pairs = [ "LTC-USD" ]
   #  ## User Credentials Required for "user" channel
   #  ## Adding user config subscribes to additional "user" channels.
   #  ## Security Note: Do NOT set user credentials in telegraf config files
@@ -106,38 +116,96 @@ func (gx *GdaxWebsocket) Start(acc telegraf.Accumulator) error {
 	subs := gx.generateSubscribeRequests()
 
 	for _, sub := range subs {
-		wsDialer := ws.Dialer{EnableCompression: true}
-		wsConn, _, err := wsDialer.Dial(gx.FeedURL, nil)
+		wsConn, _, err := gx.Dial(gx.FeedURL, nil)
 		if err != nil {
 			return err
 		}
-		gx.wsConns = append(gx.wsConns, wsConn)
+		gx.conns = append(gx.conns, wsConn)
 		if err := wsConn.WriteJSON(sub); err != nil {
 			gx.Stop()
 			return err
 		}
+		var res subscribeResponse
+		if err := wsConn.ReadJSON(&res); err != nil {
+			gx.Stop()
+			return err
+		}
+
+		if res.Type != "subscriptions" ||
+			len(res.Channels) != len(sub.Channels) {
+			gx.Stop()
+			return fmt.Errorf("invalid GDAX response")
+		}
+
+		for _, resChannel := range res.Channels {
+			match := false
+			for _, reqChannel := range sub.Channels {
+				if reqChannel.Channel == resChannel.Channel {
+					for _, resPair := range resChannel.Pairs {
+						pairMatch := false
+						for _, reqPair := range reqChannel.Pairs {
+							if resPair == reqPair {
+								pairMatch = true
+								break
+							}
+						}
+						if pairMatch {
+							break
+						}
+						for _, reqPair := range sub.Pairs {
+							if resPair == reqPair {
+								pairMatch = true
+								break
+							}
+						}
+						if !pairMatch {
+							return fmt.Errorf(
+								"invalid GDAX response: pair mismatch")
+						}
+					}
+					match = true
+				}
+			}
+			if !match {
+				return fmt.Errorf(
+					"invalid GDAX response: channel mismatch")
+			}
+
+		}
+		gx.wg.Add(1)
 		go gx.listen(wsConn)
 	}
 
 	return nil
 }
 
-func (gx *GdaxWebsocket) listen(wsConn *ws.Conn) {
-	message := gdax.Message{}
-	for true {
-		if err := wsConn.ReadJSON(&message); err != nil {
-			log.Println(err.Error())
+type conn interface {
+	ReadJSON(interface{}) error
+	Close() error
+}
+
+type dialer interface {
+	Dial(string, http.Header) (*ws.Conn, *http.Response, error)
+}
+
+func (gx *GdaxWebsocket) listen(c conn) {
+	defer gx.wg.Done()
+	msg := gdax.Message{}
+	for {
+		if err := c.ReadJSON(&msg); err != nil {
+			log.Println(err)
 			break
 		}
-		fmt.Println(message)
+		fmt.Println(msg)
 	}
 }
 
 // Stop shuts down the running go routing and stops the service
 func (gx *GdaxWebsocket) Stop() {
-	for _, wsConn := range gx.wsConns {
-		wsConn.Close()
+	for _, c := range gx.conns {
+		c.Close()
 	}
+	gx.wg.Wait()
 }
 
 func (gx *GdaxWebsocket) validateConfig() error {
@@ -308,5 +376,10 @@ func getSignature(secret, key, passphrase string) (timestamp, signature string) 
 }
 
 func init() {
-	inputs.Add("gdax_websocket", func() telegraf.Input { return &GdaxWebsocket{} })
+	inputs.Add("gdax_websocket",
+		func() telegraf.Input {
+			return &GdaxWebsocket{
+				dialer: &ws.Dialer{EnableCompression: true},
+			}
+		})
 }
