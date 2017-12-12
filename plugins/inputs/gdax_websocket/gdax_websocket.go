@@ -4,7 +4,6 @@ import (
 	"encoding/base64"
 	"fmt"
 	"log"
-	"net/http"
 	"strconv"
 	"strings"
 	"sync"
@@ -28,7 +27,6 @@ type GdaxWebsocket struct {
 
 	wg    sync.WaitGroup
 	conns []conn
-	dialer
 
 	acc telegraf.Accumulator
 }
@@ -104,6 +102,20 @@ func (gx *GdaxWebsocket) Gather(_ telegraf.Accumulator) error {
 	return nil
 }
 
+var dial = wsDial
+
+func wsDial(feedURL string) (conn, error) {
+	dialer := ws.Dialer{EnableCompression: true}
+	wsConn, _, err := dialer.Dial(feedURL, nil)
+	return wsConn, err
+}
+
+type conn interface {
+	WriteJSON(interface{}) error
+	ReadJSON(interface{}) error
+	Close() error
+}
+
 // Start validates the config, opens the websocket, subscribes to feeds, and
 // then launches a go routine to process the data stream.
 func (gx *GdaxWebsocket) Start(acc telegraf.Accumulator) error {
@@ -116,7 +128,7 @@ func (gx *GdaxWebsocket) Start(acc telegraf.Accumulator) error {
 	subs := gx.generateSubscribeRequests()
 
 	for _, sub := range subs {
-		wsConn, _, err := gx.Dial(gx.FeedURL, nil)
+		wsConn, err := dial(gx.FeedURL)
 		if err != nil {
 			return err
 		}
@@ -179,15 +191,6 @@ func (gx *GdaxWebsocket) Start(acc telegraf.Accumulator) error {
 	return nil
 }
 
-type conn interface {
-	ReadJSON(interface{}) error
-	Close() error
-}
-
-type dialer interface {
-	Dial(string, http.Header) (*ws.Conn, *http.Response, error)
-}
-
 func (gx *GdaxWebsocket) listen(c conn) {
 	defer gx.wg.Done()
 	msg := gdax.Message{}
@@ -206,6 +209,7 @@ func (gx *GdaxWebsocket) Stop() {
 		c.Close()
 	}
 	gx.wg.Wait()
+	gx.conns = nil
 }
 
 func (gx *GdaxWebsocket) validateConfig() error {
@@ -378,8 +382,6 @@ func getSignature(secret, key, passphrase string) (timestamp, signature string) 
 func init() {
 	inputs.Add("gdax_websocket",
 		func() telegraf.Input {
-			return &GdaxWebsocket{
-				dialer: &ws.Dialer{EnableCompression: true},
-			}
+			return &GdaxWebsocket{}
 		})
 }

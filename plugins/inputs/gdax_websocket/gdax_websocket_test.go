@@ -1,12 +1,15 @@
 package gdaxWebsocket
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/influxdata/telegraf"
+	"github.com/influxdata/telegraf/plugins/inputs/gdax_websocket/mocks"
 	"github.com/influxdata/telegraf/testutil"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
@@ -208,8 +211,28 @@ func testSubscribeRequests(t *testing.T, subs []subscribeRequest, numExpected in
 }
 
 func TestStart(t *testing.T) {
-	gx := &GdaxWebsocket{}
+	gx := GdaxWebsocket{}
 	assert := assert.New(t)
 	acc := &testutil.Accumulator{}
 	assert.Error(gx.Start(acc), "invalid config")
+
+	gx = validTestGdaxWebsocket
+	gx.validateConfig()
+	require.NoError(t, gx.validateConfig(), "valid config")
+	testError := errors.New("test dial: always error")
+	dial = func(_ string) (conn, error) {
+		return nil, testError
+	}
+	assert.Error(gx.Start(acc), "dial failure")
+
+	wsConn := new(mocks.Conn)
+	wsConn.On("WriteJSON", mock.AnythingOfType("subscribeRequest")).
+		Return(errors.New("WriteJSON failed")).Once().
+		On("Close").Return(nil)
+	dial = func(_ string) (conn, error) {
+		return wsConn, nil
+	}
+	assert.Error(gx.Start(acc), "WriteJSON failure")
+	wsConn.AssertNumberOfCalls(t, "WriteJSON", 1)
+	wsConn.AssertNumberOfCalls(t, "Close", 1)
 }
