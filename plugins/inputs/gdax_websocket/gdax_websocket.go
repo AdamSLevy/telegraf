@@ -127,13 +127,13 @@ func (gx *GdaxWebsocket) Start(acc telegraf.Accumulator) error {
 
 	subs := gx.generateSubscribeRequests()
 
-	for _, sub := range subs {
+	for _, req := range subs {
 		wsConn, err := dial(gx.FeedURL)
 		if err != nil {
 			return err
 		}
 		gx.conns = append(gx.conns, wsConn)
-		if err := wsConn.WriteJSON(sub); err != nil {
+		if err := wsConn.WriteJSON(req); err != nil {
 			gx.Stop()
 			return err
 		}
@@ -143,47 +143,11 @@ func (gx *GdaxWebsocket) Start(acc telegraf.Accumulator) error {
 			return err
 		}
 
-		if res.Type != "subscriptions" ||
-			len(res.Channels) != len(sub.Channels) {
+		if err := validateSubscribeResponse(req, res); err != nil {
 			gx.Stop()
-			return fmt.Errorf("invalid GDAX response")
+			return err
 		}
 
-		for _, resChannel := range res.Channels {
-			match := false
-			for _, reqChannel := range sub.Channels {
-				if reqChannel.Channel == resChannel.Channel {
-					for _, resPair := range resChannel.Pairs {
-						pairMatch := false
-						for _, reqPair := range reqChannel.Pairs {
-							if resPair == reqPair {
-								pairMatch = true
-								break
-							}
-						}
-						if pairMatch {
-							break
-						}
-						for _, reqPair := range sub.Pairs {
-							if resPair == reqPair {
-								pairMatch = true
-								break
-							}
-						}
-						if !pairMatch {
-							return fmt.Errorf(
-								"invalid GDAX response: pair mismatch")
-						}
-					}
-					match = true
-				}
-			}
-			if !match {
-				return fmt.Errorf(
-					"invalid GDAX response: channel mismatch")
-			}
-
-		}
 		gx.wg.Add(1)
 		go gx.listen(wsConn)
 	}
@@ -366,6 +330,59 @@ func (gx *GdaxWebsocket) generateSubscribeRequests() []subscribeRequest {
 	}
 
 	return subs
+}
+
+func validateSubscribeResponse(req subscribeRequest, res subscribeResponse) error {
+	if res.Type != "subscriptions" {
+		return fmt.Errorf("invalid GDAX response: 'type' != 'subscriptions'")
+	}
+	if len(res.Channels) != len(req.Channels) {
+		return fmt.Errorf("invalid GDAX response: 'channels' length differs")
+	}
+
+	for _, resChannel := range res.Channels {
+		match := false
+		for _, reqChannel := range req.Channels {
+			if resChannel.Channel == reqChannel.Channel {
+				if err := validateChannelPairs(reqChannel.Pairs,
+					req.Pairs, resChannel.Pairs); err != nil {
+					return err
+				}
+				match = true
+			}
+		}
+		if !match {
+			return fmt.Errorf("invalid GDAX response: channel mismatch")
+		}
+
+	}
+	return nil
+}
+func validateChannelPairs(reqChannelPairs []string, reqGlobalPairs []string,
+	resChannelPairs []string) error {
+	for _, resPair := range resChannelPairs {
+		pairMatch := false
+		for _, reqPair := range reqChannelPairs {
+			if resPair == reqPair {
+				pairMatch = true
+				break
+			}
+		}
+		if pairMatch {
+			break
+		}
+		for _, reqPair := range reqGlobalPairs {
+			if resPair == reqPair {
+				pairMatch = true
+				break
+			}
+		}
+		if !pairMatch {
+			return fmt.Errorf("invalid GDAX response: pair mismatch")
+		}
+	}
+
+	return nil
 }
 
 // getSignature returns the timestamp and signature for a websocket connection
