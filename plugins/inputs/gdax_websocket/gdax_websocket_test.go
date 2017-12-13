@@ -226,13 +226,32 @@ func TestStart(t *testing.T) {
 	assert.Error(gx.Start(acc), "dial failure")
 
 	wsConn := new(mocks.Conn)
+	err := errors.New("WriteJSON failed")
 	wsConn.On("WriteJSON", mock.AnythingOfType("subscribeRequest")).
-		Return(errors.New("WriteJSON failed")).Once().
-		On("Close").Return(nil)
+		Return(err).Once().
+		On("Close").Return(nil).Once()
 	dial = func(_ string) (conn, error) {
 		return wsConn, nil
 	}
-	assert.Error(gx.Start(acc), "WriteJSON failure")
-	wsConn.AssertNumberOfCalls(t, "WriteJSON", 1)
-	wsConn.AssertNumberOfCalls(t, "Close", 1)
+	assert.EqualError(gx.Start(acc), err.Error(), "WriteJSON failure")
+
+	err = errors.New("ReadJSON failed")
+	wsConn.On("WriteJSON", mock.AnythingOfType("subscribeRequest")).
+		Return(nil).Once().
+		On("ReadJSON", mock.AnythingOfType("*gdaxWebsocket.subscribeResponse")).
+		Return(err).Once().
+		On("Close").Return(nil).Once()
+	assert.EqualError(gx.Start(acc), err.Error(), "ReadJSON failure")
+}
+
+func TestWsDial(t *testing.T) {
+	url := "example.com"
+	c, err := wsDial(url)
+	assert.Error(t, err, url)
+	assert.Nil(t, c, url)
+
+	url = "wss://ws-feed.gdax.com"
+	c, err = wsDial(url)
+	assert.NoError(t, err, url)
+	assert.NotNil(t, c, url)
 }
