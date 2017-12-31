@@ -303,9 +303,6 @@ func (gx *GdaxWebsocket) generateSubscribeRequests() []subscribeRequest {
 	subID := 0
 	hasUser := false
 	for _, channel := range gx.Channels {
-		subs[subID].Type = "subscribe"
-		subs[subID].Channels = append(subs[subID].Channels, channel)
-
 		if channel.Channel == "user" {
 			if hasUser {
 				// Only one authenticated user per websocket
@@ -323,9 +320,14 @@ func (gx *GdaxWebsocket) generateSubscribeRequests() []subscribeRequest {
 			subs[subID].Timestamp = timestamp
 			subs[subID].Signature = signature
 		}
+		subs[subID].Channels = append(subs[subID].Channels, channel)
+		//	fmt.Printf("len(subs[%v].Channels) %v\n",
+		//		subID, len(subs[subID].Channels))
+
 	}
 
 	for i, _ := range subs {
+		subs[i].Type = "subscribe"
 		subs[i].Pairs = gx.Pairs
 	}
 
@@ -358,8 +360,12 @@ func validateSubscribeResponse(req subscribeRequest, res subscribeResponse) erro
 	}
 	return nil
 }
+
 func validateChannelPairs(reqChannelPairs []string, reqGlobalPairs []string,
 	resChannelPairs []string) error {
+	if len(reqChannelPairs)+len(reqGlobalPairs) != len(resChannelPairs) {
+		return fmt.Errorf("invalid GDAX response: pair length mismatch")
+	}
 	for _, resPair := range resChannelPairs {
 		pairMatch := false
 		for _, reqPair := range reqChannelPairs {
@@ -369,7 +375,7 @@ func validateChannelPairs(reqChannelPairs []string, reqGlobalPairs []string,
 			}
 		}
 		if pairMatch {
-			break
+			continue
 		}
 		for _, reqPair := range reqGlobalPairs {
 			if resPair == reqPair {
@@ -377,9 +383,10 @@ func validateChannelPairs(reqChannelPairs []string, reqGlobalPairs []string,
 				break
 			}
 		}
-		if !pairMatch {
-			return fmt.Errorf("invalid GDAX response: pair mismatch")
+		if pairMatch {
+			continue
 		}
+		return fmt.Errorf("invalid GDAX response: pair mismatch")
 	}
 
 	return nil

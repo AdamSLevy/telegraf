@@ -170,10 +170,11 @@ func TestValidateConfig(t *testing.T) {
 }
 
 func TestGenerateSubscribeRequests(t *testing.T) {
+	require := require.New(t)
 	gx := validTestGdaxWebsocket
+
 	gx.Channels = append([]channelConfig{tickerChannelConfig, level2ChannelConfig},
 		userChannelConfigs...)
-	require := require.New(t)
 	require.NoError(gx.validateConfig(), "two users")
 	testSubscribeRequests(t, gx.generateSubscribeRequests(), 2)
 
@@ -199,6 +200,8 @@ func testSubscribeRequests(t *testing.T, subs []subscribeRequest, numExpected in
 	assert.Len(subs, numExpected,
 		"config with %v users", numExpected)
 	for _, sub := range subs {
+		assert.Equal(sub.Type, "subscribe")
+		assert.NotEmpty(sub.Channels, "Channels")
 		assert.NotEmpty(sub.Key, "config with a user should have a non-empty Key")
 		assert.NotEmpty(sub.Signature,
 			"config with a user should have a non-empty Signature")
@@ -217,6 +220,7 @@ func TestStart(t *testing.T) {
 	assert.Error(gx.Start(acc), "invalid config")
 
 	gx = validTestGdaxWebsocket
+	gx.Channels = gx.Channels[0:1]
 	gx.validateConfig()
 	require.NoError(t, gx.validateConfig(), "valid config")
 	testError := errors.New("test dial: always error")
@@ -242,6 +246,45 @@ func TestStart(t *testing.T) {
 		Return(err).Once().
 		On("Close").Return(nil).Once()
 	assert.EqualError(gx.Start(acc), err.Error(), "ReadJSON failure")
+
+	var request subscribeRequest
+	wsConn.On("WriteJSON", mock.AnythingOfType("subscribeRequest")).
+		Return(func(req interface{}) error {
+			request = req.(subscribeRequest)
+			return nil
+		}).Once().
+		On("ReadJSON", mock.AnythingOfType("*gdaxWebsocket.subscribeResponse")).
+		Return(func(r interface{}) error {
+			res := r.(*subscribeResponse)
+			res.subscribeRequest = request
+			for _, ch := range res.Channels {
+				ch.Pairs = append(ch.Pairs, res.Pairs...)
+			}
+			res.Pairs = nil
+			res.Type = "subscriptions"
+			return nil
+		}).Once().
+		On("ReadJSON", mock.AnythingOfType("*gdax.Message")).
+		Return(err).Once().
+		On("Close").Return(nil).Once()
+	assert.NoError(gx.Start(acc), "valid subscription response")
+	gx.Stop()
+}
+
+//func TestValidateSubscribeResponse(t *testing.T) {
+//}
+
+func TestValidateChannelPairs(t *testing.T) {
+	reqChannelPairs := []string{"ETH-USD", "BTC-USD"}
+	reqGlobalPairs := []string{"ETH-BTC"}
+	resChannelPairs := []string{"ETH-BTC", "ETH-USD", "BTC-USD"}
+	assert := assert.New(t)
+	assert.NoError(validateChannelPairs(reqChannelPairs, reqGlobalPairs,
+		resChannelPairs), "has global and channel pairs")
+	assert.Error(validateChannelPairs(reqChannelPairs, reqGlobalPairs,
+		append(resChannelPairs, "BTC-GBP")), "extra pair")
+	assert.Error(validateChannelPairs(reqChannelPairs, reqGlobalPairs,
+		append(resChannelPairs[0:2], "BTC-GBP")), "mismatched pair")
 }
 
 func TestWsDial(t *testing.T) {
