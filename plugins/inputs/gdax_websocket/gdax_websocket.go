@@ -403,9 +403,10 @@ func getSignature(secret, key, passphrase string) (timestamp, signature string) 
 
 }
 
+func newTelegrafInput() telegraf.Input {
+	return &GdaxWebsocket{}
+}
+
 func init() {
-	inputs.Add("gdax_websocket",
-		func() telegraf.Input {
-			return &GdaxWebsocket{}
-		})
+	inputs.Add("gdax_websocket", newTelegrafInput)
 }

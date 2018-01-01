@@ -50,6 +50,7 @@ var validTestGdaxWebsocket = GdaxWebsocket{
 	}, userChannelConfigs...),
 }
 
+// This is a stupid test and I know it.
 func TestServiceInput(t *testing.T) {
 	gx := &GdaxWebsocket{}
 	acc := &testutil.Accumulator{}
@@ -57,6 +58,9 @@ func TestServiceInput(t *testing.T) {
 
 	assert.Implements((*telegraf.ServiceInput)(nil), gx,
 		"implement telegraf.ServiceInput")
+
+	assert.Implements((*telegraf.Input)(nil), newTelegrafInput(),
+		"implement telegraf.Input")
 
 	assert.NotEmpty(gx.SampleConfig(), "Sample Config")
 
@@ -271,8 +275,40 @@ func TestStart(t *testing.T) {
 	gx.Stop()
 }
 
-//func TestValidateSubscribeResponse(t *testing.T) {
-//}
+func TestValidateSubscribeResponse(t *testing.T) {
+	req := subscribeRequest{
+		Type:  "subscribe",
+		Pairs: []string{"ETH-USD"},
+		Channels: []channelConfig{
+			{Channel: "ticker", Pairs: []string{"ETH-BTC"}},
+			{Channel: "level2"},
+		},
+	}
+
+	res := subscribeResponse{
+		subscribeRequest{
+			Type: "subscriptions",
+			Channels: []channelConfig{
+				{Channel: "ticker", Pairs: []string{"ETH-USD", "ETH-BTC"}},
+				{Channel: "level2", Pairs: []string{"ETH-USD"}},
+			},
+		},
+	}
+	assert := assert.New(t)
+	assert.NoError(validateSubscribeResponse(req, res), "valid subscribeResponse")
+	chs := res.Channels
+	res.Channels = chs[1:1]
+	assert.Error(validateSubscribeResponse(req, res), "missing channel")
+	res.Channels = append([]channelConfig{},
+		channelConfig{Channel: "user", Pairs: []string{"ETH-USD"}}, chs[0])
+	assert.Error(validateSubscribeResponse(req, res), "mismatch channel")
+	res.Channels = chs
+	res.Type = "nope"
+	assert.Error(validateSubscribeResponse(req, res), "bad type")
+	res.Type = "subscriptions"
+	res.Channels[0].Pairs = []string{}
+	assert.Error(validateSubscribeResponse(req, res), "bad pairs")
+}
 
 func TestValidateChannelPairs(t *testing.T) {
 	reqChannelPairs := []string{"ETH-USD", "BTC-USD"}
