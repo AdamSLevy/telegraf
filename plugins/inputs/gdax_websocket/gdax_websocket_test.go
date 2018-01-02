@@ -2,7 +2,6 @@ package gdaxWebsocket
 
 import (
 	"errors"
-	"log"
 	"testing"
 	"time"
 
@@ -235,10 +234,9 @@ func TestStart(t *testing.T) {
 	}
 	assert.Error(gx.Start(acc), "dial failure")
 
-	wsConn := new(mocks.Conn)
-	wsConnPtr := &wsConn
+	wsConn := &mocks.Conn{}
 	dial = func(_ string) (conn, error) {
-		return *wsConnPtr, nil
+		return wsConn, nil
 	}
 	err := errors.New("WriteJSON failed")
 	wsConn.On("WriteJSON", mock.AnythingOfType("subscribeRequest")).
@@ -247,8 +245,7 @@ func TestStart(t *testing.T) {
 	assert.EqualError(gx.Start(acc), err.Error(), "WriteJSON failure")
 	wsConn.AssertExpectations(t)
 
-	wsConn = new(mocks.Conn)
-	wsConnPtr = &wsConn
+	wsConn = &mocks.Conn{}
 	err = errors.New("ReadJSON failed")
 	wsConn.On("WriteJSON", mock.AnythingOfType("subscribeRequest")).
 		Return(nil).Once().
@@ -258,8 +255,7 @@ func TestStart(t *testing.T) {
 	assert.EqualError(gx.Start(acc), err.Error(), "ReadJSON failure")
 	wsConn.AssertExpectations(t)
 
-	wsConn = new(mocks.Conn)
-	wsConnPtr = &wsConn
+	wsConn = &mocks.Conn{}
 	wsConn.On("WriteJSON", mock.AnythingOfType("subscribeRequest")).
 		Return(nil).Once().
 		On("ReadJSON", mock.AnythingOfType("*gdaxWebsocket.subscribeResponse")).
@@ -270,8 +266,7 @@ func TestStart(t *testing.T) {
 	wsConn.AssertExpectations(t)
 
 	var request subscribeRequest
-	wsConn = new(mocks.Conn)
-	wsConnPtr = &wsConn
+	wsConn = &mocks.Conn{}
 	wsConn.On("WriteJSON", mock.AnythingOfType("subscribeRequest")).
 		Return(func(req interface{}) error {
 			request = req.(subscribeRequest)
@@ -286,14 +281,10 @@ func TestStart(t *testing.T) {
 			}
 			res.Pairs = nil
 			res.Type = "subscriptions"
-			log.Println()
 			return nil
 		}).Once().
 		On("ReadJSON", mock.AnythingOfType("*gdax.Message")).
-		Return(func(r interface{}) error {
-			log.Println()
-			return nil
-		}).Once().
+		Return(nil).Once().
 		On("ReadJSON", mock.AnythingOfType("*gdax.Message")).
 		Return(err).Once().
 		On("Close").Return(nil).Once()
