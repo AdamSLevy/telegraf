@@ -2,7 +2,9 @@ package gdaxWebsocket
 
 import (
 	"errors"
+	"log"
 	"testing"
+	"time"
 
 	"github.com/influxdata/telegraf"
 	"github.com/influxdata/telegraf/plugins/inputs/gdax_websocket/mocks"
@@ -234,15 +236,19 @@ func TestStart(t *testing.T) {
 	assert.Error(gx.Start(acc), "dial failure")
 
 	wsConn := new(mocks.Conn)
+	wsConnPtr := &wsConn
+	dial = func(_ string) (conn, error) {
+		return *wsConnPtr, nil
+	}
 	err := errors.New("WriteJSON failed")
 	wsConn.On("WriteJSON", mock.AnythingOfType("subscribeRequest")).
 		Return(err).Once().
 		On("Close").Return(nil).Once()
-	dial = func(_ string) (conn, error) {
-		return wsConn, nil
-	}
 	assert.EqualError(gx.Start(acc), err.Error(), "WriteJSON failure")
+	wsConn.AssertExpectations(t)
 
+	wsConn = new(mocks.Conn)
+	wsConnPtr = &wsConn
 	err = errors.New("ReadJSON failed")
 	wsConn.On("WriteJSON", mock.AnythingOfType("subscribeRequest")).
 		Return(nil).Once().
@@ -250,8 +256,22 @@ func TestStart(t *testing.T) {
 		Return(err).Once().
 		On("Close").Return(nil).Once()
 	assert.EqualError(gx.Start(acc), err.Error(), "ReadJSON failure")
+	wsConn.AssertExpectations(t)
+
+	wsConn = new(mocks.Conn)
+	wsConnPtr = &wsConn
+	wsConn.On("WriteJSON", mock.AnythingOfType("subscribeRequest")).
+		Return(nil).Once().
+		On("ReadJSON", mock.AnythingOfType("*gdaxWebsocket.subscribeResponse")).
+		Return(nil).Once().
+		On("Close").Return(nil).Once()
+	assert.Error(gx.Start(acc), "invalid subscription response")
+	gx.Stop()
+	wsConn.AssertExpectations(t)
 
 	var request subscribeRequest
+	wsConn = new(mocks.Conn)
+	wsConnPtr = &wsConn
 	wsConn.On("WriteJSON", mock.AnythingOfType("subscribeRequest")).
 		Return(func(req interface{}) error {
 			request = req.(subscribeRequest)
@@ -266,13 +286,21 @@ func TestStart(t *testing.T) {
 			}
 			res.Pairs = nil
 			res.Type = "subscriptions"
+			log.Println()
+			return nil
+		}).Once().
+		On("ReadJSON", mock.AnythingOfType("*gdax.Message")).
+		Return(func(r interface{}) error {
+			log.Println()
 			return nil
 		}).Once().
 		On("ReadJSON", mock.AnythingOfType("*gdax.Message")).
 		Return(err).Once().
 		On("Close").Return(nil).Once()
 	assert.NoError(gx.Start(acc), "valid subscription response")
+	time.Sleep(1 * time.Second)
 	gx.Stop()
+	wsConn.AssertExpectations(t)
 }
 
 func TestValidateSubscribeResponse(t *testing.T) {
@@ -333,4 +361,9 @@ func TestWsDial(t *testing.T) {
 	c, err = wsDial(url)
 	assert.NoError(t, err, url)
 	assert.NotNil(t, c, url)
+}
+
+func init() {
+	// Disable logging during tests
+	lPrintln = func(_ ...interface{}) {}
 }

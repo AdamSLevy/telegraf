@@ -155,19 +155,21 @@ func (gx *GdaxWebsocket) Start(acc telegraf.Accumulator) error {
 	return nil
 }
 
+var lPrintln = log.Println
+
 func (gx *GdaxWebsocket) listen(c conn) {
 	defer gx.wg.Done()
 	msg := gdax.Message{}
 	for {
 		if err := c.ReadJSON(&msg); err != nil {
-			log.Println(err)
+			lPrintln(err)
 			break
 		}
-		fmt.Println(msg)
+		lPrintln(msg)
 	}
 }
 
-// Stop shuts down the running go routing and stops the service
+// Stop shuts down the running go routine and stops the service
 func (gx *GdaxWebsocket) Stop() {
 	for _, c := range gx.conns {
 		c.Close()
